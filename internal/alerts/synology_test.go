@@ -247,6 +247,53 @@ func TestQNAPRAIDSuppression(t *testing.T) {
 	}
 }
 
+func TestQNAPRAIDSuppressionFromOSVersionHint(t *testing.T) {
+	m := newTestManager(t)
+	m.ClearActiveAlerts()
+	m.mu.Lock()
+	m.config.TimeThreshold = 0
+	m.config.TimeThresholds = map[string]int{}
+	m.mu.Unlock()
+
+	host := models.Host{
+		ID:          "qnap-osver",
+		DisplayName: "storage-box",
+		Platform:    "linux",
+		OSVersion:   "QTS 5.2.3",
+		Hostname:    "nas-01",
+		Status:      "online",
+		LastSeen:    time.Now(),
+		RAID: []models.HostRAIDArray{
+			{
+				Device:        "/dev/md9",
+				Level:         "raid1",
+				State:         "degraded",
+				FailedDevices: 1,
+			},
+			{
+				Device:        "/dev/md0",
+				Level:         "raid5",
+				State:         "degraded",
+				FailedDevices: 1,
+			},
+		},
+	}
+
+	m.CheckHost(host)
+
+	m.mu.RLock()
+	_, md9Exists := m.activeAlerts["host-qnap-osver-raid-md9"]
+	_, md0Exists := m.activeAlerts["host-qnap-osver-raid-md0"]
+	m.mu.RUnlock()
+
+	if md9Exists {
+		t.Error("expected md9 alert to be suppressed when QNAP is identified from OSVersion")
+	}
+	if !md0Exists {
+		t.Error("expected md0 alert to remain for QNAP data array when only OSVersion identifies vendor")
+	}
+}
+
 func TestGenericHostMD0IsNotSuppressed(t *testing.T) {
 	m := newTestManager(t)
 	m.ClearActiveAlerts()
@@ -280,5 +327,51 @@ func TestGenericHostMD0IsNotSuppressed(t *testing.T) {
 
 	if !exists {
 		t.Error("expected md0 alert to be created for generic hosts")
+	}
+}
+
+func TestSynologyRAIDSuppressionFromPlatformHint(t *testing.T) {
+	m := newTestManager(t)
+	m.ClearActiveAlerts()
+	m.mu.Lock()
+	m.config.TimeThreshold = 0
+	m.config.TimeThresholds = map[string]int{}
+	m.mu.Unlock()
+
+	host := models.Host{
+		ID:          "syno-platform",
+		DisplayName: "storage-box",
+		Platform:    "dsm",
+		Hostname:    "nas-02",
+		Status:      "online",
+		LastSeen:    time.Now(),
+		RAID: []models.HostRAIDArray{
+			{
+				Device:        "/dev/md0",
+				Level:         "raid1",
+				State:         "degraded",
+				FailedDevices: 1,
+			},
+			{
+				Device:        "/dev/md2",
+				Level:         "raid5",
+				State:         "degraded",
+				FailedDevices: 1,
+			},
+		},
+	}
+
+	m.CheckHost(host)
+
+	m.mu.RLock()
+	_, md0Exists := m.activeAlerts["host-syno-platform-raid-md0"]
+	_, md2Exists := m.activeAlerts["host-syno-platform-raid-md2"]
+	m.mu.RUnlock()
+
+	if md0Exists {
+		t.Error("expected md0 alert to be suppressed when Synology is identified from Platform")
+	}
+	if !md2Exists {
+		t.Error("expected md2 alert to remain for Synology data array when only Platform identifies vendor")
 	}
 }

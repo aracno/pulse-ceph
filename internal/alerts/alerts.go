@@ -2905,7 +2905,13 @@ func sanitizeRAIDDevice(device string) string {
 }
 
 func hostMatchesVendorHint(host models.Host, hints ...string) bool {
-	fields := []string{host.OSName, host.DisplayName, host.Hostname}
+	fields := []string{
+		host.Platform,
+		host.OSName,
+		host.OSVersion,
+		host.DisplayName,
+		host.Hostname,
+	}
 	for _, field := range fields {
 		value := strings.ToLower(strings.TrimSpace(field))
 		if value == "" {
