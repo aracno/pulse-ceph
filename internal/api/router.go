@@ -209,11 +209,14 @@ func NewRouter(cfg *config.Config, monitor *monitoring.Monitor, mtMonitor *monit
 	r.setupRoutes()
 	log.Debug().Msg("Routes registered successfully")
 
-	// Start forwarding update progress to WebSocket
-	go r.forwardUpdateProgress()
-
-	// Start background update checker
-	go r.backgroundUpdateChecker()
+	// Package tests construct many routers in parallel and expect them to stay
+	// side-effect free. Skipping these long-lived goroutines under `go test`
+	// avoids nondeterministic update checks and leaked background work while
+	// preserving the normal runtime behavior.
+	if !runningUnderGoTest() {
+		go r.forwardUpdateProgress()
+		go r.backgroundUpdateChecker()
+	}
 
 	// Load system settings once at startup and cache them
 	r.reloadSystemSettings()
