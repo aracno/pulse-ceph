@@ -2,6 +2,7 @@ package hostagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -349,9 +350,17 @@ func TestRegisterWithPulseRetry(t *testing.T) {
 	var attempt int32
 	var gotAuth string
 	var gotAPIToken string
+	var gotAuthToken string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		gotAPIToken = r.Header.Get("X-API-Token")
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if token, _ := payload["authToken"].(string); token != "" {
+			gotAuthToken = token
+		}
 		n := atomic.AddInt32(&attempt, 1)
 		if n <= 2 {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -382,6 +391,9 @@ func TestRegisterWithPulseRetry(t *testing.T) {
 	}
 	if gotAPIToken != "test-token" {
 		t.Fatalf("X-API-Token = %q, want %q", gotAPIToken, "test-token")
+	}
+	if gotAuthToken != "test-token" {
+		t.Fatalf("authToken payload = %q, want %q", gotAuthToken, "test-token")
 	}
 }
 

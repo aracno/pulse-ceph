@@ -817,6 +817,12 @@ func (p *ProxmoxSetup) registerWithPulse(ctx context.Context, ptype, hostURL, to
 		"tokenValue": tokenValue,
 		"source":     "agent", // Indicates this was registered via agent
 	}
+	if token := strings.TrimSpace(p.apiToken); token != "" {
+		// Auto-register accepts one-time setup tokens via the JSON body. The
+		// agent initially only has that setup token, not a persisted API token,
+		// so send it here as well as the auth header.
+		payload["authToken"] = token
+	}
 
 	body, err := json.Marshal(payload)
 	if err != nil {
