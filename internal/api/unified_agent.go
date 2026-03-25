@@ -249,6 +249,73 @@ func (r *Router) proxyAgentBinaryFromGitHub(w http.ResponseWriter, req *http.Req
 	w.Write(content)
 }
 
+// proxyHostAgentBinaryFromGitHub downloads a host-agent binary from GitHub releases and
+// serves either the binary (with checksum header) or just the checksum body for .sha256 requests.
+func (r *Router) proxyHostAgentBinaryFromGitHub(w http.ResponseWriter, req *http.Request, platform, arch string, checksumOnly bool) {
+	binaryName := "pulse-host-agent-" + platform + "-" + arch
+	if platform == "windows" {
+		binaryName += ".exe"
+	}
+	githubURL := "https://github.com/rcourtman/Pulse/releases/latest/download/" + binaryName
+
+	log.Info().
+		Str("platform", platform).
+		Str("arch", arch).
+		Str("url", githubURL).
+		Msg("Local host agent binary not found, proxying from GitHub releases")
+
+	client := r.installScriptClient
+	if client == nil {
+		client = &http.Client{
+			Timeout: 5 * time.Minute,
+		}
+	}
+
+	resp, err := client.Get(githubURL)
+	if err != nil {
+		log.Error().Err(err).Str("url", githubURL).Msg("Failed to fetch host agent binary from GitHub")
+		http.Error(w, "Failed to fetch host agent binary", http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Error().Int("status", resp.StatusCode).Str("url", githubURL).Msg("GitHub returned non-200 status for host agent binary")
+		http.Error(w, "Host agent binary not found on GitHub", http.StatusNotFound)
+		return
+	}
+
+	const maxHostAgentBinarySize = 100 * 1024 * 1024
+	limitedReader := io.LimitReader(resp.Body, maxHostAgentBinarySize+1)
+
+	hasher := sha256.New()
+	content, err := io.ReadAll(io.TeeReader(limitedReader, hasher))
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to read host agent binary from GitHub")
+		http.Error(w, "Failed to read host agent binary", http.StatusInternalServerError)
+		return
+	}
+	if int64(len(content)) > maxHostAgentBinarySize {
+		log.Error().Int64("size", int64(len(content))).Msg("Host agent binary from GitHub exceeds size limit")
+		http.Error(w, "Host agent binary too large", http.StatusInternalServerError)
+		return
+	}
+
+	checksum := hex.EncodeToString(hasher.Sum(nil))
+
+	if checksumOnly {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Served-From", "github-proxy")
+		_, _ = w.Write([]byte(checksum + "\n"))
+		return
+	}
+
+	w.Header().Set("X-Checksum-Sha256", checksum)
+	w.Header().Set("X-Served-From", "github-proxy")
+	w.Header().Set("Content-Type", "application/octet-stream")
+	_, _ = w.Write(content)
+}
+
 // proxyInstallScriptFromGitHub fetches an install script from GitHub releases
 // This is used as a fallback when scripts aren't available locally (e.g., LXC updates)
 func (r *Router) proxyInstallScriptFromGitHub(w http.ResponseWriter, req *http.Request, scriptName string) {

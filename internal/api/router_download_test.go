@@ -117,3 +117,74 @@ func TestHandleDownloadHostAgentAllowsHEAD(t *testing.T) {
 		t.Fatalf("expected empty body for HEAD, got %d bytes", rr.Body.Len())
 	}
 }
+
+func TestHandleDownloadHostAgent_ProxyFromGitHub(t *testing.T) {
+	binDir := setupTempPulseBin(t)
+	router := &Router{
+		projectRoot:         t.TempDir(),
+		installScriptClient: newTestInstallScriptClient(t, "https://github.com/rcourtman/Pulse/releases/latest/download/pulse-host-agent-freebsd-amd64", http.StatusOK, "freebsd-binary", nil),
+	}
+
+	for _, path := range []string{
+		filepath.Join(binDir, "pulse-host-agent-freebsd-amd64"),
+		"/opt/pulse/pulse-host-agent-freebsd-amd64",
+		filepath.Join("/app", "pulse-host-agent-freebsd-amd64"),
+	} {
+		if _, err := os.Stat(path); err == nil {
+			t.Skipf("local host-agent binary exists at %s; skipping proxy fallback test", path)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/download/pulse-host-agent?platform=freebsd&arch=amd64", nil)
+	rr := httptest.NewRecorder()
+
+	router.handleDownloadHostAgent(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Body.String(); got != "freebsd-binary" {
+		t.Fatalf("unexpected response body: %q", got)
+	}
+	if got := rr.Header().Get("X-Served-From"); got != "github-proxy" {
+		t.Fatalf("unexpected X-Served-From header: %q", got)
+	}
+	expectedChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte("freebsd-binary")))
+	if got := rr.Header().Get("X-Checksum-Sha256"); got != expectedChecksum {
+		t.Fatalf("unexpected checksum header: got %q want %q", got, expectedChecksum)
+	}
+}
+
+func TestHandleDownloadHostAgentChecksum_ProxyFromGitHub(t *testing.T) {
+	binDir := setupTempPulseBin(t)
+	router := &Router{
+		projectRoot:         t.TempDir(),
+		installScriptClient: newTestInstallScriptClient(t, "https://github.com/rcourtman/Pulse/releases/latest/download/pulse-host-agent-freebsd-amd64", http.StatusOK, "freebsd-binary", nil),
+	}
+
+	for _, path := range []string{
+		filepath.Join(binDir, "pulse-host-agent-freebsd-amd64"),
+		"/opt/pulse/pulse-host-agent-freebsd-amd64",
+		filepath.Join("/app", "pulse-host-agent-freebsd-amd64"),
+	} {
+		if _, err := os.Stat(path); err == nil {
+			t.Skipf("local host-agent binary exists at %s; skipping proxy checksum fallback test", path)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/download/pulse-host-agent.sha256?platform=freebsd&arch=amd64", nil)
+	rr := httptest.NewRecorder()
+
+	router.handleDownloadHostAgent(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	expected := fmt.Sprintf("%x", sha256.Sum256([]byte("freebsd-binary")))
+	if got := strings.TrimSpace(rr.Body.String()); got != expected {
+		t.Fatalf("unexpected checksum body: got %q want %q", got, expected)
+	}
+	if got := rr.Header().Get("X-Served-From"); got != "github-proxy" {
+		t.Fatalf("unexpected X-Served-From header: %q", got)
+	}
+}

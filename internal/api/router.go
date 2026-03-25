@@ -7135,6 +7135,14 @@ func (r *Router) handleDownloadHostAgent(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
+	// Fallback: proxy from GitHub releases for strict platform/arch requests.
+	// This mirrors unified-agent behavior and covers installs that were updated
+	// without refreshing the local host-agent binary bundle.
+	if platformParam != "" && archParam != "" {
+		r.proxyHostAgentBinaryFromGitHub(w, req, platformParam, archParam, strings.HasSuffix(req.URL.Path, ".sha256"))
+		return
+	}
+
 	// Build detailed error message with troubleshooting guidance
 	var errorMsg strings.Builder
 	errorMsg.WriteString(fmt.Sprintf("Host agent binary not found for %s/%s\n\n", platformParam, archParam))
