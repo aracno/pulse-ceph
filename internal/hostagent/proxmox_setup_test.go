@@ -572,6 +572,112 @@ func TestProxmoxSetup_RunAll(t *testing.T) {
 	})
 }
 
+func TestProxmoxSetup_RunAll_ReRegistersWhenPulseHasNoMatchingNode(t *testing.T) {
+	mc := &mockCollector{}
+	requestKinds := make([]string, 0, 2)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if check, _ := payload["checkRegistration"].(bool); check {
+			requestKinds = append(requestKinds, "check")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"registered":false}`))
+			return
+		}
+		requestKinds = append(requestKinds, "register")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	p := NewProxmoxSetup(zerolog.Nop(), server.Client(), mc, server.URL, "token", "", "host", "", false)
+	mc.lookPathFn = func(file string) (string, error) {
+		if file == "pvesh" {
+			return "/bin/pvesh", nil
+		}
+		return "", os.ErrNotExist
+	}
+	mc.statFn = func(name string) (os.FileInfo, error) {
+		if name == stateFilePath {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	mc.commandCombinedOutputFn = func(ctx context.Context, name string, arg ...string) (string, error) {
+		if name == "pveum" && len(arg) > 2 && arg[1] == "token" {
+			return "│ value │ v1 │", nil
+		}
+		return "", nil
+	}
+	mc.mkdirAllFn = func(p string, m os.FileMode) error { return nil }
+	mc.writeFileFn = func(f string, d []byte, m os.FileMode) error { return nil }
+	mc.dialTimeoutFn = func(n, a string, d time.Duration) (net.Conn, error) {
+		return &mockConn{localAddr: &net.UDPAddr{IP: net.ParseIP("10.0.0.1")}}, nil
+	}
+
+	results, err := p.RunAll(context.Background())
+	if err != nil {
+		t.Fatalf("RunAll: %v", err)
+	}
+	if len(results) != 1 || !results[0].Registered || results[0].ProxmoxType != "pve" {
+		t.Fatalf("expected one re-registered pve result, got %#v", results)
+	}
+	if strings.Join(requestKinds, ",") != "check,register" {
+		t.Fatalf("unexpected request sequence: %v", requestKinds)
+	}
+}
+
+func TestProxmoxSetup_RunAll_SkipsWhenPulseConfirmsRegistration(t *testing.T) {
+	mc := &mockCollector{}
+	requestKinds := make([]string, 0, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if check, _ := payload["checkRegistration"].(bool); check {
+			requestKinds = append(requestKinds, "check")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"registered":true}`))
+			return
+		}
+		requestKinds = append(requestKinds, "register")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	p := NewProxmoxSetup(zerolog.Nop(), server.Client(), mc, server.URL, "token", "", "host", "", false)
+	mc.lookPathFn = func(file string) (string, error) {
+		if file == "pvesh" {
+			return "/bin/pvesh", nil
+		}
+		return "", os.ErrNotExist
+	}
+	mc.statFn = func(name string) (os.FileInfo, error) {
+		if name == stateFilePath {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	mc.dialTimeoutFn = func(n, a string, d time.Duration) (net.Conn, error) {
+		return &mockConn{localAddr: &net.UDPAddr{IP: net.ParseIP("10.0.0.1")}}, nil
+	}
+
+	results, err := p.RunAll(context.Background())
+	if err != nil {
+		t.Fatalf("RunAll: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no results when registration already exists, got %#v", results)
+	}
+	if strings.Join(requestKinds, ",") != "check" {
+		t.Fatalf("unexpected request sequence: %v", requestKinds)
+	}
+}
+
 func TestIsTypeRegistered_Legacy(t *testing.T) {
 	mc := &mockCollector{}
 	p := &ProxmoxSetup{collector: mc}

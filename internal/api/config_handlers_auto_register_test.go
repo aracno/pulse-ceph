@@ -117,6 +117,67 @@ func TestHandleAutoRegisterAcceptsWithSetupToken(t *testing.T) {
 	}
 }
 
+func TestHandleAutoRegister_CheckRegistration(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("PULSE_DATA_DIR", tempDir)
+
+	cfg := &config.Config{
+		DataPath:   tempDir,
+		ConfigPath: tempDir,
+		PVEInstances: []config.PVEInstance{
+			{
+				Name:      "pve.local",
+				Host:      "https://pve.local:8006",
+				TokenName: "pulse-monitor@pam!pulse-test",
+				Source:    "agent",
+			},
+		},
+	}
+
+	handler := newTestConfigHandlers(t, cfg)
+
+	const tokenValue = "TEMP-TOKEN-CHECK"
+	tokenHash := internalauth.HashAPIToken(tokenValue)
+	handler.codeMutex.Lock()
+	handler.setupCodes[tokenHash] = &SetupCode{
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+		NodeType:  "pve",
+	}
+	handler.codeMutex.Unlock()
+
+	reqBody := AutoRegisterRequest{
+		Type:              "pve",
+		Host:              "https://pve.local:8006",
+		ServerName:        "pve.local",
+		AuthToken:         tokenValue,
+		CheckRegistration: true,
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("failed to marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auto-register", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.HandleAutoRegister(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Registered bool `json:"registered"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if !resp.Registered {
+		t.Fatalf("expected registered=true, got false")
+	}
+}
+
 func TestHandleAutoRegisterAcceptsRecentlyUsedSetupToken(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Setenv("PULSE_DATA_DIR", tempDir)

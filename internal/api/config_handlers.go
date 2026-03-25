@@ -5330,10 +5330,61 @@ type AutoRegisterRequest struct {
 	SetupCode  string `json:"setupCode,omitempty"`  // One-time setup code for authentication (deprecated)
 	AuthToken  string `json:"authToken,omitempty"`  // Direct auth token from URL (new approach)
 	Source     string `json:"source,omitempty"`     // "agent" or "script" - indicates how the node was registered
+	// CheckRegistration asks Pulse whether this Proxmox type already exists in config.
+	// Used by agents to validate stale local registration marker files after server reinstalls.
+	CheckRegistration bool `json:"checkRegistration,omitempty"`
 	// New secure fields
 	RequestToken bool   `json:"requestToken,omitempty"` // If true, Pulse will generate and return a token
 	Username     string `json:"username,omitempty"`     // Username for creating token (e.g., "root@pam")
 	Password     string `json:"password,omitempty"`     // Password for authentication (never stored)
+}
+
+func autoRegisterNodeMatchesHost(nodeHost, requestedHost string) bool {
+	nodeHost = strings.TrimSpace(nodeHost)
+	requestedHost = strings.TrimSpace(requestedHost)
+	if nodeHost == "" || requestedHost == "" {
+		return false
+	}
+	if nodeHost == requestedHost {
+		return true
+	}
+
+	requestedIP := extractHostIP(requestedHost)
+	if requestedIP == "" {
+		requestedIP = resolveHostnameToIP(requestedHost)
+	}
+	if requestedIP == "" {
+		return false
+	}
+
+	nodeIP := extractHostIP(nodeHost)
+	if nodeIP == "" {
+		nodeIP = resolveHostnameToIP(nodeHost)
+	}
+	return nodeIP != "" && nodeIP == requestedIP
+}
+
+func (h *ConfigHandlers) autoRegisteredNodeExists(ctx context.Context, req *AutoRegisterRequest) bool {
+	if req == nil {
+		return false
+	}
+
+	switch strings.ToLower(strings.TrimSpace(req.Type)) {
+	case "pve":
+		for _, node := range h.getConfig(ctx).PVEInstances {
+			if autoRegisterNodeMatchesHost(node.Host, req.Host) {
+				return true
+			}
+		}
+	case "pbs":
+		for _, node := range h.getConfig(ctx).PBSInstances {
+			if autoRegisterNodeMatchesHost(node.Host, req.Host) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func refreshClusterCredentialsFromAutoRegister(instance *config.PVEInstance, nodeConfig NodeConfigRequest, req *AutoRegisterRequest) {
@@ -5546,6 +5597,27 @@ func (h *ConfigHandlers) HandleAutoRegister(w http.ResponseWriter, r *http.Reque
 		Bool("hasTokenValue", req.TokenValue != "").
 		Str("serverName", req.ServerName).
 		Msg("Processing auto-register request")
+
+	if req.CheckRegistration {
+		if req.Type == "" {
+			http.Error(w, "Missing required fields", http.StatusBadRequest)
+			return
+		}
+
+		host := strings.TrimSpace(req.Host)
+		if host != "" {
+			if normalizedHost, err := normalizeNodeHost(host, req.Type); err == nil {
+				host = normalizedHost
+			}
+		}
+		req.Host = host
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"registered": h.autoRegisteredNodeExists(r.Context(), &req),
+		})
+		return
+	}
 
 	// Check if this is a new secure registration request
 	if req.RequestToken {

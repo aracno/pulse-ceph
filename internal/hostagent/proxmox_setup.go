@@ -40,6 +40,10 @@ type ProxmoxSetupResult struct {
 	Registered  bool   // Whether the node was successfully registered with Pulse
 }
 
+type registrationCheckResponse struct {
+	Registered bool `json:"registered"`
+}
+
 const (
 	proxmoxUser    = "pulse-monitor"
 	proxmoxUserPVE = "pulse-monitor@pam"
@@ -342,10 +346,27 @@ func (p *ProxmoxSetup) RunAll(ctx context.Context) ([]*ProxmoxSetupResult, error
 
 // runForType executes setup for a specific Proxmox type.
 func (p *ProxmoxSetup) runForType(ctx context.Context, ptype string) (*ProxmoxSetupResult, error) {
+	hostURL := p.getHostURL(ptype)
+
 	// Check if this type is already registered
 	if p.isTypeRegistered(ptype) {
-		p.logger.Info().Str("type", ptype).Msg("Proxmox type already registered, skipping")
-		return nil, nil
+		registered, err := p.checkRegistrationWithPulse(ctx, ptype, hostURL)
+		if err != nil {
+			p.logger.Warn().
+				Err(err).
+				Str("type", ptype).
+				Msg("Failed to verify Proxmox registration state with Pulse; keeping local marker behavior")
+			return nil, nil
+		}
+		if registered {
+			p.logger.Info().Str("type", ptype).Msg("Proxmox type already registered, skipping")
+			return nil, nil
+		}
+
+		p.logger.Info().
+			Str("type", ptype).
+			Str("host", hostURL).
+			Msg("Local Proxmox registration marker exists but Pulse has no matching node; re-registering")
 	}
 
 	p.logger.Info().Str("type", ptype).Msg("Setting up Proxmox type")
@@ -357,9 +378,6 @@ func (p *ProxmoxSetup) runForType(ctx context.Context, ptype string) (*ProxmoxSe
 	}
 
 	p.logger.Info().Str("type", ptype).Str("token_id", tokenID).Msg("Created Proxmox API token")
-
-	// Get the host URL for registration
-	hostURL := p.getHostURL(ptype)
 
 	// Register with Pulse
 	registered := false
@@ -378,6 +396,51 @@ func (p *ProxmoxSetup) runForType(ctx context.Context, ptype string) (*ProxmoxSe
 		NodeHost:    hostURL,
 		Registered:  registered,
 	}, nil
+}
+
+func (p *ProxmoxSetup) checkRegistrationWithPulse(ctx context.Context, ptype, hostURL string) (bool, error) {
+	payload := map[string]interface{}{
+		"type":              ptype,
+		"host":              hostURL,
+		"serverName":        p.hostname,
+		"source":            "agent",
+		"checkRegistration": true,
+	}
+	if token := strings.TrimSpace(p.apiToken); token != "" {
+		payload["authToken"] = token
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return false, fmt.Errorf("marshal registration check payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.pulseURL+"/api/auto-register", bytes.NewReader(body))
+	if err != nil {
+		return false, fmt.Errorf("create registration check request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token := strings.TrimSpace(p.apiToken); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-API-Token", token)
+	}
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("registration check request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return false, fmt.Errorf("registration check returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	var result registrationCheckResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, fmt.Errorf("decode registration check response: %w", err)
+	}
+	return result.Registered, nil
 }
 
 // detectProxmoxType checks for pvesh (PVE) or proxmox-backup-manager (PBS).
@@ -625,6 +688,10 @@ func (p *ProxmoxSetup) getIPThatReachesPulse() string {
 	conn, err := p.collector.DialTimeout("udp", host, 500*time.Millisecond)
 	if err != nil {
 		p.logger.Debug().Err(err).Str("target", host).Msg("Could not determine local IP for Pulse connection (routing check failed)")
+		return ""
+	}
+	if conn == nil {
+		p.logger.Debug().Str("target", host).Msg("Could not determine local IP for Pulse connection (routing check returned nil connection)")
 		return ""
 	}
 	defer conn.Close()
