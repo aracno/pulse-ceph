@@ -166,3 +166,26 @@ func TestPatrolService_AdditionalSetters(t *testing.T) {
 		t.Fatalf("expected unified finding resolver to capture id, got %q", resolvedID)
 	}
 }
+
+func TestPatrolService_CanAcceptTriggers(t *testing.T) {
+	ps := NewPatrolService(nil, nil)
+
+	if ps.CanAcceptTriggers() {
+		t.Fatalf("expected triggers to be rejected before patrol starts")
+	}
+
+	ps.SetConfig(PatrolConfig{Enabled: true})
+	if ps.CanAcceptTriggers() {
+		t.Fatalf("expected triggers to be rejected while patrol is stopped")
+	}
+
+	ps.running = true
+	if !ps.CanAcceptTriggers() {
+		t.Fatalf("expected triggers to be accepted when patrol is enabled and running")
+	}
+
+	ps.SetConfig(PatrolConfig{Enabled: false})
+	if ps.CanAcceptTriggers() {
+		t.Fatalf("expected triggers to be rejected when patrol is disabled")
+	}
+}

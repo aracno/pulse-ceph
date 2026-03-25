@@ -2652,6 +2652,13 @@ func (r *Router) initializeAIIntelligenceServices(ctx context.Context, dataDir s
 						Str("resource_id", resourceID).
 						Str("reason", reason).
 						Msg("Alert bridge: Triggering mini-patrol")
+					if !patrol.CanAcceptTriggers() {
+						log.Debug().
+							Str("resource_id", resourceID).
+							Str("reason", reason).
+							Msg("Alert bridge: Skipping mini-patrol because patrol is disabled or stopped")
+						return
+					}
 					if triggerManager := r.aiSettingsHandler.GetTriggerManager(); triggerManager != nil {
 						if triggerManager.TriggerPatrol(scope) {
 							log.Debug().
@@ -2734,6 +2741,14 @@ func (r *Router) initializeAIIntelligenceServices(ctx context.Context, dataDir s
 			baselineStore.SetAnomalyCallback(func(resourceID, resourceType, metric string, severity baseline.AnomalySeverity, value, baselineValue float64) {
 				// Only trigger for significant anomalies (high or critical)
 				if severity == baseline.AnomalyHigh || severity == baseline.AnomalyCritical {
+					if !patrol.CanAcceptTriggers() {
+						log.Debug().
+							Str("resourceID", resourceID).
+							Str("metric", metric).
+							Str("severity", string(severity)).
+							Msg("Anomaly trigger skipped because patrol is disabled or stopped")
+						return
+					}
 					scope := ai.AnomalyTriggeredPatrolScope(
 						resourceID,
 						resourceType,

@@ -550,6 +550,18 @@ func (p *PatrolService) GetTriggerManager() *TriggerManager {
 	return p.triggerManager
 }
 
+// CanAcceptTriggers reports whether event-driven patrol triggers should be queued.
+// Trigger sources must honor both the enabled flag and the patrol loop lifecycle.
+func (p *PatrolService) CanAcceptTriggers() bool {
+	if p == nil {
+		return false
+	}
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.config.Enabled && p.running
+}
+
 // TriggerScopedPatrol runs a targeted patrol for specific resources.
 // This is called by the TriggerManager for event-driven patrols.
 // When ResourceIDs or ResourceTypes are specified in the scope, only those resources
