@@ -43,6 +43,8 @@ const (
 	patrolQuickMinTurns     = 10
 	patrolQuickMaxTurns     = 30
 	patrolMaxTotalTokens    = 250000
+	patrolRetrySeedChars1   = 16000
+	patrolRetrySeedChars2   = 8000
 )
 
 // CleanThinkingTokens removes model-specific thinking markers from AI responses.
@@ -276,180 +278,242 @@ func (p *PatrolService) runAIAnalysis(ctx context.Context, state models.StateSna
 	defer executor.SetPatrolFindingCreator(nil) // Clear after run
 
 	// Execute the agentic patrol loop
-	var contentBuffer strings.Builder
-	var inputTokens, outputTokens int
+	type patrolStreamAttempt struct {
+		resp               *PatrolStreamResponse
+		content            string
+		completedToolCalls []ToolCallRecord
+		signalToolCalls    []ToolCallRecord
+	}
 
-	// Tool call collection
-	var toolCallsMu sync.Mutex
-	pendingToolCalls := make(map[string]ToolCallRecord)
-	var pendingToolOrder []string
-	anonToolCounter := 0
-	var completedToolCalls []ToolCallRecord
-	var rawToolOutputs []string
+	executePatrol := func(prompt string) (*patrolStreamAttempt, error) {
+		var contentBuffer strings.Builder
 
-	chatResp, chatErr := cs.ExecutePatrolStream(ctx, PatrolExecuteRequest{
-		Prompt:         seedContext,
-		SystemPrompt:   p.getPatrolSystemPrompt(),
-		SessionID:      "patrol-main",
-		UseCase:        "patrol",
-		MaxTurns:       maxTurns,
-		MaxTotalTokens: patrolMaxTotalTokens,
-	}, func(event ChatStreamEvent) {
-		switch event.Type {
-		case "content":
-			var contentData struct {
-				Text string `json:"text"`
-			}
-			if json.Unmarshal(event.Data, &contentData) == nil && contentData.Text != "" {
-				contentBuffer.WriteString(contentData.Text)
-				if !noStream {
-					p.appendStreamContent(contentData.Text)
+		var toolCallsMu sync.Mutex
+		pendingToolCalls := make(map[string]ToolCallRecord)
+		var pendingToolOrder []string
+		anonToolCounter := 0
+		var completedToolCalls []ToolCallRecord
+		var rawToolOutputs []string
+
+		chatResp, chatErr := cs.ExecutePatrolStream(ctx, PatrolExecuteRequest{
+			Prompt:         prompt,
+			SystemPrompt:   p.getPatrolSystemPrompt(),
+			SessionID:      "patrol-main",
+			UseCase:        "patrol",
+			MaxTurns:       maxTurns,
+			MaxTotalTokens: patrolMaxTotalTokens,
+		}, func(event ChatStreamEvent) {
+			switch event.Type {
+			case "content":
+				var contentData struct {
+					Text string `json:"text"`
 				}
-			}
-		case "thinking":
-			var thinkingData struct {
-				Text string `json:"text"`
-			}
-			if json.Unmarshal(event.Data, &thinkingData) == nil && thinkingData.Text != "" {
-				if !noStream {
-					p.broadcast(PatrolStreamEvent{
-						Type:    "thinking",
-						Content: thinkingData.Text,
-					})
+				if json.Unmarshal(event.Data, &contentData) == nil && contentData.Text != "" {
+					contentBuffer.WriteString(contentData.Text)
+					if !noStream {
+						p.appendStreamContent(contentData.Text)
+					}
 				}
-			}
-		case "tool_start":
-			var data struct {
-				ID       string `json:"id"`
-				Name     string `json:"name"`
-				Input    string `json:"input"`
-				RawInput string `json:"raw_input"`
-			}
-			if json.Unmarshal(event.Data, &data) == nil {
-				if data.ID == "" {
-					anonToolCounter++
-					data.ID = fmt.Sprintf("patrol-anon-%d", anonToolCounter)
+			case "thinking":
+				var thinkingData struct {
+					Text string `json:"text"`
 				}
-				if !noStream {
-					p.broadcast(PatrolStreamEvent{
-						Type:         "tool_start",
-						ToolID:       data.ID,
-						ToolName:     data.Name,
-						ToolInput:    data.Input,
-						ToolRawInput: data.RawInput,
-					})
+				if json.Unmarshal(event.Data, &thinkingData) == nil && thinkingData.Text != "" {
+					if !noStream {
+						p.broadcast(PatrolStreamEvent{
+							Type:    "thinking",
+							Content: thinkingData.Text,
+						})
+					}
 				}
-				input := data.Input
-				if data.RawInput != "" {
-					input = data.RawInput
+			case "tool_start":
+				var data struct {
+					ID       string `json:"id"`
+					Name     string `json:"name"`
+					Input    string `json:"input"`
+					RawInput string `json:"raw_input"`
 				}
-				toolCallsMu.Lock()
-				pendingToolOrder = append(pendingToolOrder, data.ID)
-				pendingToolCalls[data.ID] = ToolCallRecord{
-					ID:        data.ID,
-					ToolName:  data.Name,
-					Input:     truncateString(input, MaxToolInputSize),
-					StartTime: time.Now().UnixMilli(),
-				}
-				toolCallsMu.Unlock()
-			}
-		case "tool_end":
-			var data struct {
-				ID       string `json:"id"`
-				Name     string `json:"name"`
-				Input    string `json:"input"`
-				RawInput string `json:"raw_input"`
-				Output   string `json:"output"`
-				Success  bool   `json:"success"`
-			}
-			if json.Unmarshal(event.Data, &data) == nil {
-				if data.ID == "" {
-					if len(pendingToolOrder) > 0 {
-						data.ID = pendingToolOrder[0]
-						pendingToolOrder = pendingToolOrder[1:]
-					} else {
+				if json.Unmarshal(event.Data, &data) == nil {
+					if data.ID == "" {
 						anonToolCounter++
-						data.ID = fmt.Sprintf("patrol-anon-end-%d", anonToolCounter)
+						data.ID = fmt.Sprintf("patrol-anon-%d", anonToolCounter)
 					}
-				} else if len(pendingToolOrder) > 0 {
-					for i, id := range pendingToolOrder {
-						if id == data.ID {
-							pendingToolOrder = append(pendingToolOrder[:i], pendingToolOrder[i+1:]...)
-							break
-						}
+					if !noStream {
+						p.broadcast(PatrolStreamEvent{
+							Type:         "tool_start",
+							ToolID:       data.ID,
+							ToolName:     data.Name,
+							ToolInput:    data.Input,
+							ToolRawInput: data.RawInput,
+						})
 					}
-				}
-				if !noStream {
-					success := data.Success
-					p.broadcast(PatrolStreamEvent{
-						Type:         "tool_end",
-						ToolID:       data.ID,
-						ToolName:     data.Name,
-						ToolInput:    data.Input,
-						ToolRawInput: data.RawInput,
-						ToolOutput:   data.Output,
-						ToolSuccess:  &success,
-					})
-				}
-				toolCallsMu.Lock()
-				if pending, ok := pendingToolCalls[data.ID]; ok {
-					now := time.Now().UnixMilli()
 					input := data.Input
 					if data.RawInput != "" {
 						input = data.RawInput
 					}
-					if input != "" {
-						pending.Input = truncateString(input, MaxToolInputSize)
-					}
-					pending.Output = truncateString(data.Output, MaxToolOutputSize)
-					pending.Success = data.Success
-					pending.EndTime = now
-					pending.Duration = now - pending.StartTime
-					completedToolCalls = append(completedToolCalls, pending)
-					rawToolOutputs = append(rawToolOutputs, data.Output)
-					delete(pendingToolCalls, data.ID)
-				} else {
-					now := time.Now().UnixMilli()
-					input := data.Input
-					if data.RawInput != "" {
-						input = data.RawInput
-					}
-					completedToolCalls = append(completedToolCalls, ToolCallRecord{
+					toolCallsMu.Lock()
+					pendingToolOrder = append(pendingToolOrder, data.ID)
+					pendingToolCalls[data.ID] = ToolCallRecord{
 						ID:        data.ID,
 						ToolName:  data.Name,
 						Input:     truncateString(input, MaxToolInputSize),
-						Output:    truncateString(data.Output, MaxToolOutputSize),
-						Success:   data.Success,
-						StartTime: now,
-						EndTime:   now,
-						Duration:  0,
-					})
-					rawToolOutputs = append(rawToolOutputs, data.Output)
+						StartTime: time.Now().UnixMilli(),
+					}
+					toolCallsMu.Unlock()
 				}
-				toolCallsMu.Unlock()
+			case "tool_end":
+				var data struct {
+					ID       string `json:"id"`
+					Name     string `json:"name"`
+					Input    string `json:"input"`
+					RawInput string `json:"raw_input"`
+					Output   string `json:"output"`
+					Success  bool   `json:"success"`
+				}
+				if json.Unmarshal(event.Data, &data) == nil {
+					if data.ID == "" {
+						if len(pendingToolOrder) > 0 {
+							data.ID = pendingToolOrder[0]
+							pendingToolOrder = pendingToolOrder[1:]
+						} else {
+							anonToolCounter++
+							data.ID = fmt.Sprintf("patrol-anon-end-%d", anonToolCounter)
+						}
+					} else if len(pendingToolOrder) > 0 {
+						for i, id := range pendingToolOrder {
+							if id == data.ID {
+								pendingToolOrder = append(pendingToolOrder[:i], pendingToolOrder[i+1:]...)
+								break
+							}
+						}
+					}
+					if !noStream {
+						success := data.Success
+						p.broadcast(PatrolStreamEvent{
+							Type:         "tool_end",
+							ToolID:       data.ID,
+							ToolName:     data.Name,
+							ToolInput:    data.Input,
+							ToolRawInput: data.RawInput,
+							ToolOutput:   data.Output,
+							ToolSuccess:  &success,
+						})
+					}
+					toolCallsMu.Lock()
+					if pending, ok := pendingToolCalls[data.ID]; ok {
+						now := time.Now().UnixMilli()
+						input := data.Input
+						if data.RawInput != "" {
+							input = data.RawInput
+						}
+						if input != "" {
+							pending.Input = truncateString(input, MaxToolInputSize)
+						}
+						pending.Output = truncateString(data.Output, MaxToolOutputSize)
+						pending.Success = data.Success
+						pending.EndTime = now
+						pending.Duration = now - pending.StartTime
+						completedToolCalls = append(completedToolCalls, pending)
+						rawToolOutputs = append(rawToolOutputs, data.Output)
+						delete(pendingToolCalls, data.ID)
+					} else {
+						now := time.Now().UnixMilli()
+						input := data.Input
+						if data.RawInput != "" {
+							input = data.RawInput
+						}
+						completedToolCalls = append(completedToolCalls, ToolCallRecord{
+							ID:        data.ID,
+							ToolName:  data.Name,
+							Input:     truncateString(input, MaxToolInputSize),
+							Output:    truncateString(data.Output, MaxToolOutputSize),
+							Success:   data.Success,
+							StartTime: now,
+							EndTime:   now,
+							Duration:  0,
+						})
+						rawToolOutputs = append(rawToolOutputs, data.Output)
+					}
+					toolCallsMu.Unlock()
+				}
+			}
+		})
+
+		if chatErr != nil {
+			return &patrolStreamAttempt{resp: chatResp}, chatErr
+		}
+
+		finalContent := chatResp.Content
+		if finalContent == "" {
+			finalContent = contentBuffer.String()
+		}
+
+		p.ensureInvestigationToolCall(ctx, executor, &toolCallsMu, &completedToolCalls, &rawToolOutputs, noStream)
+
+		toolCallsMu.Lock()
+		signalToolCalls := make([]ToolCallRecord, len(completedToolCalls))
+		for i, tc := range completedToolCalls {
+			signalToolCalls[i] = tc
+			if i < len(rawToolOutputs) && rawToolOutputs[i] != "" {
+				signalToolCalls[i].Output = rawToolOutputs[i]
 			}
 		}
-	})
+		toolCallsMu.Unlock()
 
-	if chatErr != nil {
+		return &patrolStreamAttempt{
+			resp:               chatResp,
+			content:            finalContent,
+			completedToolCalls: completedToolCalls,
+			signalToolCalls:    signalToolCalls,
+		}, nil
+	}
+
+	retryBudgets := []int{patrolRetrySeedChars1, patrolRetrySeedChars2}
+	attemptPrompt := seedContext
+	var attemptResult *patrolStreamAttempt
+	var chatErr error
+	for attempt := 0; ; attempt++ {
+		attemptResult, chatErr = executePatrol(attemptPrompt)
+		if chatErr == nil {
+			break
+		}
+
 		// Record partial token usage even on failure so budget enforcement
 		// stays accurate for tokens consumed before the error.
-		if chatResp != nil {
-			p.recordPatrolUsage("patrol", chatResp.InputTokens, chatResp.OutputTokens)
+		if attemptResult != nil && attemptResult.resp != nil {
+			p.recordPatrolUsage("patrol", attemptResult.resp.InputTokens, attemptResult.resp.OutputTokens)
 		}
-		if !noStream {
-			p.setStreamPhase("idle")
-			p.broadcast(PatrolStreamEvent{Type: "error", Content: chatErr.Error()})
+
+		if !isPatrolContextWindowError(chatErr) || attempt >= len(retryBudgets) {
+			if !noStream {
+				p.setStreamPhase("idle")
+				p.broadcast(PatrolStreamEvent{Type: "error", Content: chatErr.Error()})
+			}
+			return nil, fmt.Errorf("agentic patrol failed: %w", chatErr)
 		}
-		return nil, fmt.Errorf("agentic patrol failed: %w", chatErr)
+
+		reducedPrompt := reducePatrolSeedContext(seedContext, retryBudgets[attempt])
+		if len(reducedPrompt) >= len(attemptPrompt) {
+			if !noStream {
+				p.setStreamPhase("idle")
+				p.broadcast(PatrolStreamEvent{Type: "error", Content: chatErr.Error()})
+			}
+			return nil, fmt.Errorf("agentic patrol failed: %w", chatErr)
+		}
+
+		log.Warn().
+			Int("retry", attempt+1).
+			Int("seed_chars", len(seedContext)).
+			Int("reduced_seed_chars", len(reducedPrompt)).
+			Err(chatErr).
+			Msg("AI Patrol: Retrying with reduced seed context after provider context-window error")
+
+		attemptPrompt = reducedPrompt
 	}
 
-	finalContent := chatResp.Content
-	if finalContent == "" {
-		finalContent = contentBuffer.String()
-	}
-	inputTokens = chatResp.InputTokens
-	outputTokens = chatResp.OutputTokens
+	finalContent := attemptResult.content
+	inputTokens := attemptResult.resp.InputTokens
+	outputTokens := attemptResult.resp.OutputTokens
 
 	// Record patrol token usage for cost tracking and budget enforcement
 	p.recordPatrolUsage("patrol", inputTokens, outputTokens)
@@ -464,8 +528,6 @@ func (p *PatrolService) runAIAnalysis(ctx context.Context, state models.StateSna
 		Int("findings_resolved", adapter.getResolvedCount()).
 		Msg("AI Patrol: Agentic patrol analysis complete")
 
-	p.ensureInvestigationToolCall(ctx, executor, &toolCallsMu, &completedToolCalls, &rawToolOutputs, noStream)
-
 	// Broadcast completion
 	if !noStream {
 		p.broadcast(PatrolStreamEvent{
@@ -476,16 +538,8 @@ func (p *PatrolService) runAIAnalysis(ctx context.Context, state models.StateSna
 	}
 
 	// Collect completed tool calls
-	toolCallsMu.Lock()
-	collectedToolCalls := completedToolCalls
-	signalToolCalls := make([]ToolCallRecord, len(collectedToolCalls))
-	for i, tc := range collectedToolCalls {
-		signalToolCalls[i] = tc
-		if i < len(rawToolOutputs) && rawToolOutputs[i] != "" {
-			signalToolCalls[i].Output = rawToolOutputs[i]
-		}
-	}
-	toolCallsMu.Unlock()
+	collectedToolCalls := attemptResult.completedToolCalls
+	signalToolCalls := attemptResult.signalToolCalls
 
 	// --- Deterministic signal detection + evaluation pass ---
 	// Build signal thresholds from user config so detection aligns with alert settings
@@ -550,8 +604,8 @@ func (p *PatrolService) runAIAnalysis(ctx context.Context, state models.StateSna
 		RejectedFindings: rejectedCount,
 		InputTokens:      inputTokens,
 		OutputTokens:     outputTokens,
-		StopReason:       chatResp.StopReason,
-		StoppedEarly:     chatResp.StopReason == "token_limit",
+		StopReason:       attemptResult.resp.StopReason,
+		StoppedEarly:     attemptResult.resp.StopReason == "token_limit",
 		ToolCalls:        collectedToolCalls,
 		ReportedIDs:      adapter.getReportedFindingIDs(),
 		ResolvedIDs:      adapter.getResolvedIDs(),
@@ -1147,6 +1201,198 @@ func (p *PatrolService) buildSeedContext(state models.StateSnapshot, scope *Patr
 	}
 
 	return sb.String(), seededFindingIDs
+}
+
+type patrolSeedSection struct {
+	heading string
+	body    string
+	order   int
+}
+
+func renderPatrolSeedSection(section patrolSeedSection) string {
+	if section.heading == "" {
+		return section.body
+	}
+	if strings.HasSuffix(section.body, "\n\n") {
+		return section.heading + "\n" + section.body
+	}
+	if strings.HasSuffix(section.body, "\n") {
+		return section.heading + "\n" + section.body + "\n"
+	}
+	return section.heading + "\n" + section.body + "\n\n"
+}
+
+func splitPatrolSeedSections(seed string) []patrolSeedSection {
+	if seed == "" {
+		return nil
+	}
+
+	lines := strings.SplitAfter(seed, "\n")
+	sections := make([]patrolSeedSection, 0, 8)
+	current := patrolSeedSection{order: 0}
+
+	flush := func() {
+		if current.heading == "" && strings.TrimSpace(current.body) == "" {
+			return
+		}
+		sections = append(sections, current)
+	}
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "# ") {
+			flush()
+			current = patrolSeedSection{
+				heading: strings.TrimRight(line, "\n"),
+				order:   len(sections),
+			}
+			continue
+		}
+		current.body += line
+	}
+	flush()
+
+	return sections
+}
+
+func patrolSeedSectionPriority(heading string) int {
+	switch heading {
+	case "# Patrol Scope":
+		return 0
+	case "# Active Alerts", "# Active Findings to Re-check", "# Alert Thresholds":
+		return 1
+	case "# Recently Resolved Alerts", "# Disk Health", "# Backup Status", "# User Notes", "# User Feedback on Previous Findings":
+		return 2
+	case "# Anomalies", "# Capacity Forecasts", "# Failure Predictions", "# Recent Infrastructure Changes (last 24h)", "# Connections":
+		return 3
+	case "# Node Metrics", "# Guest Metrics", "# Hosts", "# Storage", "# Docker", "# PBS Datastores", "# Ceph", "# Kubernetes Clusters", "# Proxmox Mail Gateway (PMG)":
+		return 4
+	case "# Known Resource Correlations", "# Previous Patrol Run":
+		return 5
+	default:
+		return 6
+	}
+}
+
+func truncatePatrolSeedSection(section patrolSeedSection, maxChars int) string {
+	rendered := renderPatrolSeedSection(section)
+	if len(rendered) <= maxChars {
+		return rendered
+	}
+
+	if maxChars <= len(section.heading)+32 {
+		return ""
+	}
+
+	const omissionNote = "\n[... truncated for provider context limit ...]\n\n"
+	bodyBudget := maxChars - len(section.heading) - 1 - len(omissionNote)
+	if bodyBudget <= 16 {
+		return ""
+	}
+
+	body := section.body
+	if len(body) > bodyBudget {
+		body = body[:bodyBudget]
+	}
+	body = strings.TrimRight(body, "\n")
+	return section.heading + "\n" + body + omissionNote
+}
+
+func reducePatrolSeedContext(seed string, maxChars int) string {
+	if maxChars <= 0 || len(seed) <= maxChars {
+		return seed
+	}
+
+	sections := splitPatrolSeedSections(seed)
+	if len(sections) == 0 {
+		if maxChars <= 48 {
+			return seed[:maxChars]
+		}
+		return seed[:maxChars-44] + "\n[... truncated for provider context limit ...]\n"
+	}
+
+	const note = "# Context Budget Note\nProvider context window is smaller than the full patrol seed context. Lower-priority sections were omitted or truncated for this retry.\n\n"
+	if len(note) >= maxChars {
+		return note[:maxChars]
+	}
+
+	remaining := maxChars - len(note)
+	indices := make([]int, len(sections))
+	for i := range sections {
+		indices[i] = i
+	}
+	sort.SliceStable(indices, func(i, j int) bool {
+		left := sections[indices[i]]
+		right := sections[indices[j]]
+		lp := patrolSeedSectionPriority(left.heading)
+		rp := patrolSeedSectionPriority(right.heading)
+		if lp != rp {
+			return lp < rp
+		}
+		return left.order < right.order
+	})
+
+	type chosenSection struct {
+		order int
+		text  string
+	}
+
+	chosen := make([]chosenSection, 0, len(sections))
+	used := 0
+	for _, idx := range indices {
+		sectionText := renderPatrolSeedSection(sections[idx])
+		if used+len(sectionText) <= remaining {
+			chosen = append(chosen, chosenSection{order: sections[idx].order, text: sectionText})
+			used += len(sectionText)
+			continue
+		}
+
+		truncated := truncatePatrolSeedSection(sections[idx], remaining-used)
+		if truncated == "" {
+			continue
+		}
+		chosen = append(chosen, chosenSection{order: sections[idx].order, text: truncated})
+		used += len(truncated)
+	}
+
+	if len(chosen) == 0 {
+		if maxChars <= 48 {
+			return seed[:maxChars]
+		}
+		return seed[:maxChars-44] + "\n[... truncated for provider context limit ...]\n"
+	}
+
+	sort.Slice(chosen, func(i, j int) bool {
+		return chosen[i].order < chosen[j].order
+	})
+
+	var sb strings.Builder
+	sb.WriteString(note)
+	for _, section := range chosen {
+		sb.WriteString(section.text)
+	}
+
+	result := sb.String()
+	if len(result) <= maxChars {
+		return result
+	}
+	if maxChars <= 48 {
+		return result[:maxChars]
+	}
+	return result[:maxChars-44] + "\n[... truncated for provider context limit ...]\n"
+}
+
+func isPatrolContextWindowError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "exceed_context_size_error") ||
+		strings.Contains(msg, "exceeds the available context size") ||
+		strings.Contains(msg, "maximum context length") ||
+		strings.Contains(msg, "context window") ||
+		strings.Contains(msg, "context length") ||
+		strings.Contains(msg, "n_ctx")
 }
 
 // buildScopedSet constructs the set of resource IDs in scope, expanding with correlated resources.

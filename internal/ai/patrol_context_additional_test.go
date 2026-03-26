@@ -70,3 +70,27 @@ func TestPatrolService_buildSeedContext_ScopeSection(t *testing.T) {
 		t.Fatalf("expected depth in scope section, got:\n%s", seed)
 	}
 }
+
+func TestReducePatrolSeedContext_PrioritizesCriticalSections(t *testing.T) {
+	seed := strings.Join([]string{
+		"# Previous Patrol Run\nold\n",
+		"# Node Metrics\n" + strings.Repeat("node metrics\n", 20),
+		"# Active Alerts\ncritical alert\n",
+		"# Alert Thresholds\ncpu: 90\n",
+		"# Patrol Scope\nfocus resource\n",
+	}, "\n")
+
+	reduced := reducePatrolSeedContext(seed, 280)
+	if !strings.Contains(reduced, "# Active Alerts") {
+		t.Fatalf("expected active alerts to remain, got:\n%s", reduced)
+	}
+	if !strings.Contains(reduced, "# Alert Thresholds") {
+		t.Fatalf("expected alert thresholds to remain, got:\n%s", reduced)
+	}
+	if !strings.Contains(reduced, "# Patrol Scope") {
+		t.Fatalf("expected patrol scope to remain, got:\n%s", reduced)
+	}
+	if strings.Contains(reduced, "# Node Metrics") {
+		t.Fatalf("expected bulky node metrics section to be omitted, got:\n%s", reduced)
+	}
+}

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -259,6 +260,72 @@ func TestRunAIAnalysis_EarlyErrors(t *testing.T) {
 			t.Fatalf("expected executor nil error, got %v", err)
 		}
 	})
+}
+
+func TestRunAIAnalysis_RetriesWithReducedSeedContextOnProviderLimit(t *testing.T) {
+	persistence := config.NewConfigPersistence(t.TempDir())
+	svc := NewService(persistence, nil)
+	svc.cfg = &config.AIConfig{Enabled: true, PatrolModel: "mock:model"}
+	svc.provider = &mockProvider{}
+
+	executor := tools.NewPulseToolExecutor(tools.ExecutorConfig{})
+	promptLengths := make([]int, 0, 2)
+	mockCS := &mockChatService{
+		executor: executor,
+		executePatrolStreamFunc: func(ctx context.Context, req PatrolExecuteRequest, callback ChatStreamCallback) (*PatrolStreamResponse, error) {
+			promptLengths = append(promptLengths, len(req.Prompt))
+			if len(promptLengths) == 1 {
+				return &PatrolStreamResponse{}, fmt.Errorf("API error (400): {\"error\":{\"message\":\"request (9126 tokens) exceeds the available context size (8192 tokens)\",\"type\":\"exceed_context_size_error\",\"n_ctx\":8192}}")
+			}
+			return &PatrolStreamResponse{
+				Content:      "analysis complete",
+				InputTokens:  10,
+				OutputTokens: 5,
+			}, nil
+		},
+	}
+	svc.SetChatService(mockCS)
+
+	var guests []models.VM
+	for i := 0; i < 600; i++ {
+		guests = append(guests, models.VM{
+			ID:     fmt.Sprintf("vm-%d", i),
+			VMID:   100 + i,
+			Name:   fmt.Sprintf("very-long-guest-name-%03d-%s", i, strings.Repeat("x", 120)),
+			Node:   "pve-1",
+			Status: "running",
+			CPU:    0.10,
+			Memory: models.Memory{Usage: 20.0},
+			Disk:   models.Disk{Usage: 15.0},
+		})
+	}
+	state := models.StateSnapshot{
+		Nodes: []models.Node{
+			{ID: "node-1", Name: "pve-1", Status: "online", CPU: 0.20, Memory: models.Memory{Usage: 30.0}},
+		},
+		VMs: guests,
+	}
+
+	ps := NewPatrolService(svc, &mockStateProvider{state: state})
+	ps.SetConfig(PatrolConfig{
+		Enabled:       true,
+		AnalyzeNodes:  true,
+		AnalyzeGuests: true,
+	})
+
+	result, err := ps.runAIAnalysis(context.Background(), state, nil)
+	if err != nil {
+		t.Fatalf("runAIAnalysis returned error: %v", err)
+	}
+	if result == nil || result.Response != "analysis complete" {
+		t.Fatalf("unexpected analysis result: %#v", result)
+	}
+	if len(promptLengths) != 2 {
+		t.Fatalf("expected 2 patrol attempts, got %d", len(promptLengths))
+	}
+	if promptLengths[1] >= promptLengths[0] {
+		t.Fatalf("expected retry prompt to be smaller, got %d then %d", promptLengths[0], promptLengths[1])
+	}
 }
 
 func TestSeedResourceInventory_QuietSummary(t *testing.T) {
