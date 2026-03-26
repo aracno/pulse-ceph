@@ -210,6 +210,41 @@ func TestComputeDiagnostics_PVEUsesFingerprint(t *testing.T) {
 	}
 }
 
+func TestMergeDiagnosticsConnection(t *testing.T) {
+	t.Run("keeps successful probe", func(t *testing.T) {
+		connected, errMsg := mergeDiagnosticsConnection(true, "", false, false)
+		if !connected {
+			t.Fatalf("expected successful probe to stay connected")
+		}
+		if errMsg != "" {
+			t.Fatalf("expected no error, got %q", errMsg)
+		}
+	})
+
+	t.Run("keeps probe failure when monitor also disagrees", func(t *testing.T) {
+		connected, errMsg := mergeDiagnosticsConnection(false, "probe failed", false, true)
+		if connected {
+			t.Fatalf("expected connection to remain false")
+		}
+		if errMsg != "probe failed" {
+			t.Fatalf("expected original error, got %q", errMsg)
+		}
+	})
+
+	t.Run("prefers monitor connected state over transient probe failure", func(t *testing.T) {
+		connected, errMsg := mergeDiagnosticsConnection(false, "probe failed", true, true)
+		if !connected {
+			t.Fatalf("expected monitor-connected instance to stay connected")
+		}
+		if !strings.Contains(errMsg, "monitor still reports this instance connected") {
+			t.Fatalf("expected merged warning, got %q", errMsg)
+		}
+		if !strings.Contains(errMsg, "probe failed") {
+			t.Fatalf("expected original probe error to be preserved, got %q", errMsg)
+		}
+	})
+}
+
 func TestBuildAPITokenDiagnostic_WithDockerUsage(t *testing.T) {
 	now := time.Now()
 	lastUsed := now.Add(-time.Hour)
