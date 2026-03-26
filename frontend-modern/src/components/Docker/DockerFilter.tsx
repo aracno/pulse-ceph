@@ -233,7 +233,7 @@ export const DockerFilter: Component<DockerFilterProps> = (props) => {
                 commitSearchToHistory(e.currentTarget.value);
               }
             }}
-            class="w-full pl-9 pr-16 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 dark:focus:border-blue-400 outline-none transition-all"
+            class="w-full pl-9 pr-24 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 dark:focus:border-blue-400 outline-none transition-all"
             title="Search containers by name, image, ID, or host"
           />
           <svg
@@ -249,26 +249,26 @@ export const DockerFilter: Component<DockerFilterProps> = (props) => {
               d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
             />
           </svg>
-          <Show when={props.search()}>
-            <button
-              type="button"
-              class="absolute right-9 top-1/2 -translate-y-1/2 transform text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-              onClick={() => props.setSearch('')}
-              onMouseDown={markSuppressCommit}
-              aria-label="Clear search"
-              title="Clear search"
-            >
-              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-            </button>
-          </Show>
           <div class="absolute inset-y-0 right-2 flex items-center gap-1">
+            <Show when={props.search()}>
+              <button
+                type="button"
+                class="flex h-6 w-6 items-center justify-center rounded-lg border border-transparent text-gray-400 transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:ring-offset-1 focus:ring-offset-white dark:text-gray-500 dark:hover:border-red-900/60 dark:hover:bg-red-900/20 dark:hover:text-red-300 dark:focus:ring-blue-400/40 dark:focus:ring-offset-gray-900"
+                onClick={() => props.setSearch('')}
+                onMouseDown={markSuppressCommit}
+                aria-label="Clear search"
+                title="Clear search"
+              >
+                <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </Show>
             <button
               ref={(el) => (historyToggleRef = el)}
               type="button"
