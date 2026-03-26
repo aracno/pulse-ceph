@@ -192,9 +192,11 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 
 	// Channel to collect VM results from each node
 	type nodeResult struct {
-		node string
-		vms  []models.VM
-		err  error
+		node     string
+		vms      []models.VM
+		alertVMs []models.VM
+		snaps    []GuestMemorySnapshot
+		err      error
 	}
 
 	resultChan := make(chan nodeResult, len(nodes))
@@ -264,6 +266,8 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 			}
 
 			var nodeVMs []models.VM
+			var nodeAlertVMs []models.VM
+			var nodeSnapshots []GuestMemorySnapshot
 
 			// Process each VM
 			for _, vm := range vms {
@@ -893,8 +897,8 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 				}
 
 				nodeVMs = append(nodeVMs, modelVM)
-
-				m.recordGuestSnapshot(instanceName, modelVM.Type, n.Node, vm.VMID, GuestMemorySnapshot{
+				nodeAlertVMs = append(nodeAlertVMs, modelVM)
+				nodeSnapshots = append(nodeSnapshots, GuestMemorySnapshot{
 					Name:         vm.Name,
 					Status:       vm.Status,
 					RetrievedAt:  sampleTime,
@@ -902,9 +906,6 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 					Memory:       modelVM.Memory,
 					Raw:          guestRaw,
 				})
-
-				// Check alerts
-				m.alertManager.CheckGuest(modelVM, instanceName)
 			}
 
 			nodeDuration := time.Since(nodeStart)
@@ -914,7 +915,7 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 				Dur("duration", nodeDuration).
 				Msg("Node VM polling completed")
 
-			resultChan <- nodeResult{node: n.Node, vms: nodeVMs}
+			resultChan <- nodeResult{node: n.Node, vms: nodeVMs, alertVMs: nodeAlertVMs, snaps: nodeSnapshots}
 		}(node)
 	}
 
@@ -926,6 +927,8 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 
 	// Collect results from all nodes
 	var allVMs []models.VM
+	var allAlertVMs []models.VM
+	var allSnapshots []GuestMemorySnapshot
 	successfulNodes := 0
 	failedNodes := 0
 
@@ -935,6 +938,8 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 		} else {
 			successfulNodes++
 			allVMs = append(allVMs, result.vms...)
+			allAlertVMs = append(allAlertVMs, result.alertVMs...)
+			allSnapshots = append(allSnapshots, result.snaps...)
 		}
 	}
 
@@ -955,10 +960,23 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 		}
 	}
 
+	stabilizeSuspiciousRepeatedVMMemory(allVMs, allAlertVMs, allSnapshots, prevInstanceVMs, time.Now())
 	m.logSuspiciousRepeatedVMMemoryUsage(instanceName, allVMs, prevInstanceVMs)
 
 	// Update state with all VMs
 	m.state.UpdateVMsForInstance(instanceName, allVMs)
+
+	for i, vm := range allVMs {
+		if m.guestMetadataStore != nil {
+			m.guestMetadataStore.GetWithLegacyMigration(vm.ID, instanceName, vm.Node, vm.VMID)
+		}
+		if i < len(allSnapshots) {
+			m.recordGuestSnapshot(instanceName, vm.Type, vm.Node, vm.VMID, allSnapshots[i])
+		}
+		if i < len(allAlertVMs) {
+			m.alertManager.CheckGuest(allAlertVMs[i], instanceName)
+		}
+	}
 
 	// Record guest metrics history for running VMs (enables sparkline/trends view)
 	now := time.Now()

@@ -8314,6 +8314,8 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 			orderedOK[result.order] = result.ok
 		}
 
+		stabilizeSuspiciousRepeatedVMMemory(orderedVMs, orderedAlertVMs, orderedSnapshots, prevInstanceVMs, time.Now())
+
 		for i, ok := range orderedOK {
 			if !ok {
 				continue
