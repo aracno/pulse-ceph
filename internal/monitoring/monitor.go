@@ -431,6 +431,88 @@ func mergeHostAgentSMARTIntoDisks(disks []models.PhysicalDisk, nodes []models.No
 	return updated
 }
 
+func proxmoxDiskMatchesExclude(disk proxmox.Disk, excludePatterns []string) bool {
+	if len(excludePatterns) == 0 {
+		return false
+	}
+
+	if fsfilters.MatchesDeviceExclude(disk.DevPath, excludePatterns) {
+		return true
+	}
+
+	devName := strings.TrimSpace(filepath.Base(disk.DevPath))
+	return devName != "" && fsfilters.MatchesDeviceExclude(devName, excludePatterns)
+}
+
+func (m *Monitor) buildPhysicalDisksForNode(inst, nodeName string, disks []proxmox.Disk, excludePatterns []string, collectedAt time.Time) []models.PhysicalDisk {
+	physicalDisks := make([]models.PhysicalDisk, 0, len(disks))
+
+	for _, disk := range disks {
+		log.Debug().
+			Str("node", nodeName).
+			Str("disk", disk.DevPath).
+			Str("model", disk.Model).
+			Str("health", disk.Health).
+			Int("wearout", disk.Wearout).
+			Msg("Checking disk health")
+
+		if proxmoxDiskMatchesExclude(disk, excludePatterns) {
+			log.Debug().
+				Str("node", nodeName).
+				Str("disk", disk.DevPath).
+				Msg("Disk matches agent --disk-exclude, clearing alerts and omitting from physical disk state")
+
+			healthyDisk := disk
+			healthyDisk.Health = "PASSED"
+			healthyDisk.Wearout = 100
+			m.alertManager.CheckDiskHealth(inst, nodeName, healthyDisk)
+			continue
+		}
+
+		diskID := fmt.Sprintf("%s-%s-%s", inst, nodeName, strings.ReplaceAll(disk.DevPath, "/", "-"))
+		physicalDisks = append(physicalDisks, models.PhysicalDisk{
+			ID:          diskID,
+			Node:        nodeName,
+			Instance:    inst,
+			DevPath:     disk.DevPath,
+			Model:       disk.Model,
+			Serial:      disk.Serial,
+			WWN:         disk.WWN,
+			Type:        disk.Type,
+			Size:        disk.Size,
+			Health:      disk.Health,
+			Wearout:     disk.Wearout,
+			RPM:         disk.RPM,
+			Used:        disk.Used,
+			LastChecked: collectedAt,
+		})
+
+		normalizedHealth := strings.ToUpper(strings.TrimSpace(disk.Health))
+		if normalizedHealth != "" && normalizedHealth != "UNKNOWN" && normalizedHealth != "PASSED" && normalizedHealth != "OK" {
+			log.Warn().
+				Str("node", nodeName).
+				Str("disk", disk.DevPath).
+				Str("model", disk.Model).
+				Str("health", disk.Health).
+				Int("wearout", disk.Wearout).
+				Msg("Disk health issue detected")
+
+			m.alertManager.CheckDiskHealth(inst, nodeName, disk)
+		} else if disk.Wearout > 0 && disk.Wearout < 10 {
+			log.Warn().
+				Str("node", nodeName).
+				Str("disk", disk.DevPath).
+				Str("model", disk.Model).
+				Int("wearout", disk.Wearout).
+				Msg("SSD wearout critical - less than 10% life remaining")
+
+			m.alertManager.CheckDiskHealth(inst, nodeName, disk)
+		}
+	}
+
+	return physicalDisks
+}
+
 // writeSMARTMetrics writes SMART attribute metrics to the persistent metrics store for a single disk.
 func (m *Monitor) writeSMARTMetrics(disk models.PhysicalDisk, now time.Time) {
 	// Determine resource ID: serial (preferred) → WWN → composite fallback
@@ -6864,82 +6946,15 @@ func (m *Monitor) pollPVEInstance(ctx context.Context, instanceName string, clie
 					// Mark this node as successfully polled
 					polledNodes[node.Node] = true
 
-					// Check each disk for health issues and add to state
-					for _, disk := range disks {
-						// Create PhysicalDisk model
-						diskID := fmt.Sprintf("%s-%s-%s", inst, node.Node, strings.ReplaceAll(disk.DevPath, "/", "-"))
-						physicalDisk := models.PhysicalDisk{
-							ID:          diskID,
-							Node:        node.Node,
-							Instance:    inst,
-							DevPath:     disk.DevPath,
-							Model:       disk.Model,
-							Serial:      disk.Serial,
-							WWN:         disk.WWN,
-							Type:        disk.Type,
-							Size:        disk.Size,
-							Health:      disk.Health,
-							Wearout:     disk.Wearout,
-							RPM:         disk.RPM,
-							Used:        disk.Used,
-							LastChecked: time.Now(),
-						}
-
-						allDisks = append(allDisks, physicalDisk)
-
-						log.Debug().
-							Str("node", node.Node).
-							Str("disk", disk.DevPath).
-							Str("model", disk.Model).
-							Str("health", disk.Health).
-							Int("wearout", disk.Wearout).
-							Msg("Checking disk health")
-
-						// If the linked host agent has --disk-exclude for this disk, pass a
-						// synthetic healthy disk to CheckDiskHealth so any existing alerts
-						// get cleared naturally, then skip the normal health/wearout checks.
-						if excludePatterns, ok := diskExcludeByNode[node.Node]; ok {
-							if fsfilters.MatchesDeviceExclude(disk.DevPath, excludePatterns) {
-								log.Debug().
-									Str("node", node.Node).
-									Str("disk", disk.DevPath).
-									Msg("Disk matches agent --disk-exclude, clearing any alerts")
-								// Synthetic healthy disk: health="PASSED", wearout=100 (full life)
-								// This causes CheckDiskHealth to clear both health and wearout alerts.
-								healthyDisk := disk
-								healthyDisk.Health = "PASSED"
-								healthyDisk.Wearout = 100
-								m.alertManager.CheckDiskHealth(inst, node.Node, healthyDisk)
-								continue
-							}
-						}
-
-						normalizedHealth := strings.ToUpper(strings.TrimSpace(disk.Health))
-						if normalizedHealth != "" && normalizedHealth != "UNKNOWN" && normalizedHealth != "PASSED" && normalizedHealth != "OK" {
-							// Disk has failed or is failing - alert manager will handle this
-							log.Warn().
-								Str("node", node.Node).
-								Str("disk", disk.DevPath).
-								Str("model", disk.Model).
-								Str("health", disk.Health).
-								Int("wearout", disk.Wearout).
-								Msg("Disk health issue detected")
-
-							// Pass disk info to alert manager
-							m.alertManager.CheckDiskHealth(inst, node.Node, disk)
-						} else if disk.Wearout > 0 && disk.Wearout < 10 {
-							// Low wearout warning (less than 10% life remaining)
-							log.Warn().
-								Str("node", node.Node).
-								Str("disk", disk.DevPath).
-								Str("model", disk.Model).
-								Int("wearout", disk.Wearout).
-								Msg("SSD wearout critical - less than 10% life remaining")
-
-							// Pass to alert manager for wearout alert
-							m.alertManager.CheckDiskHealth(inst, node.Node, disk)
-						}
-					}
+					allDisks = append(allDisks,
+						m.buildPhysicalDisksForNode(
+							inst,
+							node.Node,
+							disks,
+							diskExcludeByNode[node.Node],
+							time.Now(),
+						)...,
+					)
 				}
 
 				// Preserve existing disk data for nodes that weren't polled (offline or error)

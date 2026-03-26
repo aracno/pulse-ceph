@@ -33,19 +33,57 @@ func (e fakeDirEntry) Info() (fs.FileInfo, error) { return nil, nil }
 func TestListBlockDevices(t *testing.T) {
 	origRun := runCommandOutput
 	origGOOS := runtimeGOOS
-	t.Cleanup(func() { runCommandOutput = origRun; runtimeGOOS = origGOOS })
+	origReadDir := readDir
+	origReadFile := readFile
+	origEvalSymlinks := evalSymlinks
+	t.Cleanup(func() {
+		runCommandOutput = origRun
+		runtimeGOOS = origGOOS
+		readDir = origReadDir
+		readFile = origReadFile
+		evalSymlinks = origEvalSymlinks
+	})
 
 	runtimeGOOS = "linux"
-	runCommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if name != "lsblk" {
-			return nil, errors.New("unexpected command")
+	readDir = func(string) ([]fs.DirEntry, error) {
+		return []fs.DirEntry{
+			fakeDirEntry{name: "sda"},
+			fakeDirEntry{name: "nvme0n1"},
+			fakeDirEntry{name: "zd0"},
+		}, nil
+	}
+	readFile = func(path string) ([]byte, error) {
+		switch path {
+		case "/sys/block/sda/device/vendor":
+			return []byte("ATA\n"), nil
+		case "/sys/block/sda/device/model":
+			return []byte("Samsung SSD 870 EVO\n"), nil
+		case "/sys/block/nvme0n1/device/model":
+			return []byte("Samsung SSD 980\n"), nil
+		default:
+			return nil, fs.ErrNotExist
 		}
-		return mustMarshalLSBLK(t, []lsblkDevice{
-			{Name: "sda", Type: "disk", Model: "Samsung SSD 870 EVO", Vendor: "ATA"},
-			{Name: "sda1", Type: "part"},
-			{Name: "sr0", Type: "rom"},
-			{Name: "nvme0n1", Type: "disk", Model: "Samsung SSD 980", Vendor: "Samsung"},
-		}), nil
+	}
+	evalSymlinks = func(path string) (string, error) {
+		switch path {
+		case "/sys/block/sda":
+			return "/sys/devices/pci0000:00/0000:00:17.0/ata1/host0/target0:0:0/0:0:0:0/block/sda", nil
+		case "/sys/block/sda/device/subsystem":
+			return "/sys/bus/scsi", nil
+		case "/sys/block/nvme0n1":
+			return "/sys/devices/pci0000:00/0000:00:1d.0/nvme/nvme0/nvme0n1", nil
+		case "/sys/block/nvme0n1/device/subsystem":
+			return "/sys/bus/nvme", nil
+		case "/sys/block/zd0":
+			return "/sys/devices/virtual/block/zd0", nil
+		case "/sys/block/zd0/device/subsystem":
+			return "", fs.ErrNotExist
+		default:
+			return "", fs.ErrNotExist
+		}
+	}
+	runCommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, errors.New("lsblk should not be called when sysfs enumeration succeeds")
 	}
 
 	devices, err := listBlockDevices(context.Background(), nil)
@@ -61,10 +99,14 @@ func TestListBlockDevicesFreeBSD(t *testing.T) {
 	origRun := runCommandOutput
 	origReadDir := readDir
 	origGOOS := runtimeGOOS
+	origReadFile := readFile
+	origEvalSymlinks := evalSymlinks
 	t.Cleanup(func() {
 		runCommandOutput = origRun
 		readDir = origReadDir
 		runtimeGOOS = origGOOS
+		readFile = origReadFile
+		evalSymlinks = origEvalSymlinks
 	})
 
 	runtimeGOOS = "freebsd"
@@ -96,10 +138,14 @@ func TestListBlockDevicesFreeBSDWithExcludes(t *testing.T) {
 	origRun := runCommandOutput
 	origReadDir := readDir
 	origGOOS := runtimeGOOS
+	origReadFile := readFile
+	origEvalSymlinks := evalSymlinks
 	t.Cleanup(func() {
 		runCommandOutput = origRun
 		readDir = origReadDir
 		runtimeGOOS = origGOOS
+		readFile = origReadFile
+		evalSymlinks = origEvalSymlinks
 	})
 
 	runtimeGOOS = "freebsd"
@@ -115,6 +161,107 @@ func TestListBlockDevicesFreeBSDWithExcludes(t *testing.T) {
 		t.Fatalf("listBlockDevices error: %v", err)
 	}
 	if len(devices) != 2 || devices[0] != "/dev/ada0" || devices[1] != "/dev/nvd0" {
+		t.Fatalf("unexpected devices: %#v", devices)
+	}
+}
+
+func TestListBlockDevicesLinuxFallsBackToLSBLKWhenSysfsUnavailable(t *testing.T) {
+	origRun := runCommandOutput
+	origGOOS := runtimeGOOS
+	origReadDir := readDir
+	origReadFile := readFile
+	origEvalSymlinks := evalSymlinks
+	t.Cleanup(func() {
+		runCommandOutput = origRun
+		runtimeGOOS = origGOOS
+		readDir = origReadDir
+		readFile = origReadFile
+		evalSymlinks = origEvalSymlinks
+	})
+
+	runtimeGOOS = "linux"
+	readDir = func(string) ([]fs.DirEntry, error) {
+		return nil, errors.New("sysfs unavailable")
+	}
+	readFile = func(string) ([]byte, error) { return nil, fs.ErrNotExist }
+	evalSymlinks = func(string) (string, error) { return "", fs.ErrNotExist }
+	runCommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name != "lsblk" {
+			return nil, errors.New("unexpected command")
+		}
+		return mustMarshalLSBLK(t, []lsblkDevice{
+			{Name: "sda", Type: "disk", Model: "Samsung SSD 870 EVO", Vendor: "ATA"},
+			{Name: "sr0", Type: "rom"},
+		}), nil
+	}
+
+	devices, err := listBlockDevices(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("listBlockDevices error: %v", err)
+	}
+	if len(devices) != 1 || devices[0] != "/dev/sda" {
+		t.Fatalf("unexpected devices: %#v", devices)
+	}
+}
+
+func TestListBlockDevicesLinuxSysfsSkipsVirtualMetadata(t *testing.T) {
+	origRun := runCommandOutput
+	origGOOS := runtimeGOOS
+	origReadDir := readDir
+	origReadFile := readFile
+	origEvalSymlinks := evalSymlinks
+	t.Cleanup(func() {
+		runCommandOutput = origRun
+		runtimeGOOS = origGOOS
+		readDir = origReadDir
+		readFile = origReadFile
+		evalSymlinks = origEvalSymlinks
+	})
+
+	runtimeGOOS = "linux"
+	readDir = func(string) ([]fs.DirEntry, error) {
+		return []fs.DirEntry{
+			fakeDirEntry{name: "sda"},
+			fakeDirEntry{name: "sdb"},
+		}, nil
+	}
+	readFile = func(path string) ([]byte, error) {
+		switch path {
+		case "/sys/block/sda/device/vendor":
+			return []byte("ATA\n"), nil
+		case "/sys/block/sda/device/model":
+			return []byte("Samsung SSD 870 EVO\n"), nil
+		case "/sys/block/sdb/device/vendor":
+			return []byte("VMware\n"), nil
+		case "/sys/block/sdb/device/model":
+			return []byte("Virtual disk\n"), nil
+		default:
+			return nil, fs.ErrNotExist
+		}
+	}
+	evalSymlinks = func(path string) (string, error) {
+		switch path {
+		case "/sys/block/sda":
+			return "/sys/devices/pci0000:00/0000:00:17.0/ata1/host0/target0:0:0/0:0:0:0/block/sda", nil
+		case "/sys/block/sda/device/subsystem":
+			return "/sys/bus/scsi", nil
+		case "/sys/block/sdb":
+			return "/sys/devices/pci0000:00/0000:00:18.0/host1/target1:0:0/1:0:0:0/block/sdb", nil
+		case "/sys/block/sdb/device/subsystem":
+			return "/sys/bus/scsi", nil
+		default:
+			return "", fs.ErrNotExist
+		}
+	}
+	runCommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, errors.New("lsblk should not be called when sysfs enumeration succeeds")
+	}
+
+	devices, err := listBlockDevices(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("listBlockDevices error: %v", err)
+	}
+	if len(devices) != 1 || devices[0] != "/dev/sda" {
 		t.Fatalf("unexpected devices: %#v", devices)
 	}
 }

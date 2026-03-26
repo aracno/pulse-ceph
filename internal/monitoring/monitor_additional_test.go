@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rcourtman/pulse-go-rewrite/internal/alerts"
 	"github.com/rcourtman/pulse-go-rewrite/internal/config"
 	"github.com/rcourtman/pulse-go-rewrite/internal/models"
+	"github.com/rcourtman/pulse-go-rewrite/pkg/proxmox"
 )
 
 type fakeDockerChecker struct{}
@@ -212,6 +214,88 @@ func TestBuildClusterClientEndpoints_PrefersOverrideWhenEndpointFingerprintPrese
 	}
 	if fingerprints["https://10.15.2.11:8006"] != "node1-fp" {
 		t.Fatalf("expected fingerprint to follow effective endpoint URL, got %q", fingerprints["https://10.15.2.11:8006"])
+	}
+}
+
+func TestProxmoxDiskMatchesExclude(t *testing.T) {
+	tests := []struct {
+		name     string
+		disk     proxmox.Disk
+		patterns []string
+		want     bool
+	}{
+		{
+			name:     "matches devpath directly",
+			disk:     proxmox.Disk{DevPath: "/dev/sda"},
+			patterns: []string{"/dev/sda"},
+			want:     true,
+		},
+		{
+			name:     "matches basename from devpath",
+			disk:     proxmox.Disk{DevPath: "/dev/sda"},
+			patterns: []string{"sda"},
+			want:     true,
+		},
+		{
+			name:     "does not match different device",
+			disk:     proxmox.Disk{DevPath: "/dev/sdb"},
+			patterns: []string{"sda"},
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := proxmoxDiskMatchesExclude(tt.disk, tt.patterns); got != tt.want {
+				t.Fatalf("proxmoxDiskMatchesExclude(%+v, %v) = %t, want %t", tt.disk, tt.patterns, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildPhysicalDisksForNodeOmitsExcludedDisksAndClearsAlerts(t *testing.T) {
+	monitor := &Monitor{alertManager: alerts.NewManager()}
+	t.Cleanup(func() {
+		monitor.alertManager.Stop()
+	})
+
+	failingDisk := proxmox.Disk{
+		DevPath: "/dev/sda",
+		Model:   "Samsung SSD",
+		Health:  "FAILED",
+		Wearout: 1,
+	}
+	healthyDisk := proxmox.Disk{
+		DevPath: "/dev/sdb",
+		Model:   "WD Blue",
+		Health:  "PASSED",
+		Wearout: 100,
+	}
+
+	monitor.alertManager.CheckDiskHealth("inst", "node1", failingDisk)
+	if got := len(monitor.alertManager.GetActiveAlerts()); got == 0 {
+		t.Fatalf("expected a failing disk alert before exclusion handling")
+	}
+
+	disks := monitor.buildPhysicalDisksForNode(
+		"inst",
+		"node1",
+		[]proxmox.Disk{failingDisk, healthyDisk},
+		[]string{"sda"},
+		time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC),
+	)
+
+	if len(disks) != 1 {
+		t.Fatalf("expected 1 physical disk after exclusion, got %d", len(disks))
+	}
+	if disks[0].DevPath != "/dev/sdb" {
+		t.Fatalf("expected only /dev/sdb to remain, got %q", disks[0].DevPath)
+	}
+
+	for _, alert := range monitor.alertManager.GetActiveAlerts() {
+		if alert.ID == "disk-health-inst-node1-/dev/sda" || alert.ID == "disk-wearout-inst-node1-/dev/sda" {
+			t.Fatalf("expected excluded disk alerts to be cleared, still found %+v", alert)
+		}
 	}
 }
 

@@ -20,6 +20,8 @@ import (
 var (
 	execLookPath     = exec.LookPath
 	readDir          = os.ReadDir
+	readFile         = os.ReadFile
+	evalSymlinks     = filepath.EvalSymlinks
 	runCommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return exec.CommandContext(ctx, name, args...).Output()
 	}
@@ -202,6 +204,92 @@ func listBlockDevices(ctx context.Context, diskExclude []string) ([]string, erro
 
 // listBlockDevicesLinux uses lsblk to find disks on Linux.
 func listBlockDevicesLinux(ctx context.Context, diskExclude []string) ([]string, error) {
+	devices, err := listBlockDevicesLinuxFromSysfs(diskExclude)
+	if err == nil {
+		return devices, nil
+	}
+	if err != nil {
+		log.Debug().Err(err).Msg("Failed to enumerate Linux disks from /sys/block, falling back to lsblk")
+	}
+
+	return listBlockDevicesLinuxFromLSBLK(ctx, diskExclude)
+}
+
+func listBlockDevicesLinuxFromSysfs(diskExclude []string) ([]string, error) {
+	entries, err := readDir("/sys/block")
+	if err != nil {
+		return nil, err
+	}
+
+	var devices []string
+	for _, entry := range entries {
+		name := strings.TrimSpace(entry.Name())
+		if name == "" {
+			continue
+		}
+
+		devicePath := "/dev/" + name
+		if reason := linuxSMARTSkipReasonSysfs(name); reason != "" {
+			log.Debug().
+				Str("device", devicePath).
+				Str("reason", reason).
+				Msg("Skipping non-physical device for SMART collection")
+			continue
+		}
+		if matchesDeviceExclude(name, devicePath, diskExclude) {
+			log.Debug().Str("device", devicePath).Msg("Skipping excluded device for SMART collection")
+			continue
+		}
+		devices = append(devices, devicePath)
+	}
+
+	return devices, nil
+}
+
+func linuxSMARTSkipReasonSysfs(name string) string {
+	for _, prefix := range linuxSMARTVirtualPrefixes {
+		if strings.HasPrefix(strings.ToLower(name), prefix) {
+			return "virtual/logical device prefix"
+		}
+	}
+
+	blockPath := filepath.Join("/sys/block", name)
+	if resolved, err := evalSymlinks(blockPath); err == nil && strings.Contains(strings.ToLower(resolved), "/virtual/") {
+		return "virtual block device"
+	}
+
+	subsystemPath := filepath.Join(blockPath, "device", "subsystem")
+	if resolved, err := evalSymlinks(subsystemPath); err == nil {
+		lowerResolved := strings.ToLower(resolved)
+		for _, token := range linuxSMARTVirtualSubsystemTokens {
+			if strings.Contains(lowerResolved, token) {
+				return "virtual/logical subsystem"
+			}
+		}
+	}
+
+	metadata := strings.ToLower(strings.TrimSpace(
+		readTrimmedFile(filepath.Join(blockPath, "device", "vendor")) + " " +
+			readTrimmedFile(filepath.Join(blockPath, "device", "model")),
+	))
+	for _, token := range linuxSMARTVirtualMetadataTokens {
+		if strings.Contains(metadata, token) {
+			return "virtual disk model/vendor signature"
+		}
+	}
+
+	return ""
+}
+
+func readTrimmedFile(path string) string {
+	data, err := readFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func listBlockDevicesLinuxFromLSBLK(ctx context.Context, diskExclude []string) ([]string, error) {
 	output, err := runCommandOutput(ctx, "lsblk", "-J", "-d", "-o", "NAME,TYPE,TRAN,MODEL,VENDOR,SUBSYSTEMS")
 	if err != nil {
 		return nil, err
