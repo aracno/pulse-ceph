@@ -339,6 +339,56 @@ func TestSendResolvedWebhookUsesServiceTemplate(t *testing.T) {
 	}
 }
 
+func TestSendResolvedWebhookDiscordIncludesMention(t *testing.T) {
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = body
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	manager := NewNotificationManager("https://pulse.local")
+	defer manager.Stop()
+	manager.webhookClient = server.Client()
+	if err := manager.UpdateAllowedPrivateCIDRs("127.0.0.1/32"); err != nil {
+		t.Fatalf("allowlist: %v", err)
+	}
+
+	alertList := []*alerts.Alert{{
+		ID:           "a1",
+		Type:         "cpu",
+		Level:        alerts.AlertLevelWarning,
+		ResourceID:   "vm100",
+		ResourceName: "web-server",
+		Node:         "pve1",
+		Message:      "CPU usage high",
+		Value:        95,
+		Threshold:    90,
+		StartTime:    time.Now().Add(-5 * time.Minute),
+	}}
+
+	webhook := WebhookConfig{
+		Name:    "discord-test",
+		URL:     server.URL + "/discord",
+		Enabled: true,
+		Service: "discord",
+		Mention: "@everyone",
+	}
+
+	if err := manager.sendResolvedWebhook(webhook, alertList, time.Now()); err != nil {
+		t.Fatalf("sendResolvedWebhook error: %v", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(gotBody, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload["content"] != "@everyone" {
+		t.Fatalf("expected discord mention in content, got %v", payload["content"])
+	}
+}
+
 func TestSendResolvedWebhookGenericFallback(t *testing.T) {
 	var gotBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -422,6 +472,7 @@ func TestSendResolvedWebhookSlackTemplate(t *testing.T) {
 		URL:     server.URL + "/slack",
 		Enabled: true,
 		Service: "slack",
+		Mention: "@channel",
 	}
 
 	if err := manager.sendResolvedWebhook(webhook, alertList, time.Now()); err != nil {
@@ -438,6 +489,74 @@ func TestSendResolvedWebhookSlackTemplate(t *testing.T) {
 	_, hasText := payload["text"]
 	if !hasBlocks && !hasText {
 		t.Fatalf("expected Slack payload to contain 'blocks' or 'text', got keys: %v", payload)
+	}
+	if payload["text"] != "@channel Resolved: db-server" {
+		t.Fatalf("expected slack mention in text, got %v", payload["text"])
+	}
+
+	blocks, ok := payload["blocks"].([]interface{})
+	if !ok || len(blocks) == 0 {
+		t.Fatalf("expected slack blocks, got %v", payload["blocks"])
+	}
+	firstBlock, ok := blocks[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected first block object, got %T", blocks[0])
+	}
+	text, ok := firstBlock["text"].(map[string]interface{})
+	if !ok || text["text"] != "@channel" {
+		t.Fatalf("expected first slack block to carry mention, got %v", firstBlock["text"])
+	}
+}
+
+func TestSendResolvedWebhookMattermostIncludesMention(t *testing.T) {
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = body
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	manager := NewNotificationManager("https://pulse.local")
+	defer manager.Stop()
+	manager.webhookClient = server.Client()
+	if err := manager.UpdateAllowedPrivateCIDRs("127.0.0.1/32"); err != nil {
+		t.Fatalf("allowlist: %v", err)
+	}
+
+	alertList := []*alerts.Alert{{
+		ID:           "a1",
+		Type:         "memory",
+		Level:        alerts.AlertLevelCritical,
+		ResourceID:   "vm200",
+		ResourceName: "db-server",
+		Node:         "pve2",
+		Message:      "Memory usage critical",
+		Value:        98,
+		Threshold:    95,
+		StartTime:    time.Now().Add(-10 * time.Minute),
+	}}
+
+	webhook := WebhookConfig{
+		Name:    "mattermost-test",
+		URL:     server.URL + "/mattermost",
+		Enabled: true,
+		Service: "mattermost",
+		Mention: "@channel",
+	}
+
+	if err := manager.sendResolvedWebhook(webhook, alertList, time.Now()); err != nil {
+		t.Fatalf("sendResolvedWebhook error: %v", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(gotBody, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+
+	text, _ := payload["text"].(string)
+	if !strings.HasPrefix(text, "@channel\n\n:white_check_mark: **RESOLVED**") {
+		t.Fatalf("expected mattermost text to start with mention, got %q", text)
 	}
 }
 
