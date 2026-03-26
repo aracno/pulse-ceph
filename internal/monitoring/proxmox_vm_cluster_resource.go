@@ -44,6 +44,7 @@ func (m *Monitor) pollEfficientQEMUResource(
 	networkOutBytes := int64(res.NetOut)
 	var individualDisks []models.Disk
 	diskFromAgent := false
+	diskStatusReason := ""
 	var ipAddresses []string
 	var networkInterfaces []models.GuestNetworkInterface
 	var osName, osVersion, agentVersion string
@@ -68,6 +69,11 @@ func (m *Monitor) pollEfficientQEMUResource(
 	diskUsage := safePercentage(float64(diskUsed), float64(diskTotal))
 	if diskUsed == 0 && diskTotal > 0 && res.Status == "running" {
 		diskUsage = -1
+		diskStatusReason = "no-data"
+	}
+	if res.Status != "running" && diskTotal > 0 {
+		diskUsage = -1
+		diskStatusReason = "vm-stopped"
 	}
 
 	if res.Status == "running" {
@@ -125,6 +131,10 @@ func (m *Monitor) pollEfficientQEMUResource(
 				Str("vm", res.Name).
 				Int("vmid", res.VMID).
 				Msg("Could not get VM status, using cluster/resources disk data")
+			if diskTotal > 0 {
+				diskUsage = -1
+				diskStatusReason = "no-status"
+			}
 		}
 	}
 
@@ -194,6 +204,10 @@ func (m *Monitor) pollEfficientQEMUResource(
 				}
 			}
 			if err != nil {
+				diskStatusReason = classifyGuestAgentDiskStatusError(err)
+				if diskTotal > 0 {
+					diskUsage = -1
+				}
 				errMsg := err.Error()
 				switch {
 				case strings.Contains(errMsg, "500") || strings.Contains(errMsg, "QEMU guest agent is not running"):
@@ -208,6 +222,10 @@ func (m *Monitor) pollEfficientQEMUResource(
 				return
 			}
 			if len(fsInfo) == 0 {
+				diskStatusReason = "no-filesystems"
+				if diskTotal > 0 {
+					diskUsage = -1
+				}
 				log.Info().Str("instance", instanceName).Str("vm", res.Name).Int("vmid", res.VMID).Msg("Guest agent returned no filesystem info - agent may need restart or VM may have no mounted filesystems")
 				return
 			}
@@ -281,10 +299,19 @@ func (m *Monitor) pollEfficientQEMUResource(
 				diskFree = totalBytes - usedBytes
 				diskUsage = safePercentage(float64(usedBytes), float64(totalBytes))
 				diskFromAgent = true
+				diskStatusReason = ""
 			} else if diskTotal > 0 {
 				diskUsage = -1
+				diskStatusReason = "special-filesystems-only"
 			}
 		})
+	} else if res.Status == "running" && diskTotal > 0 {
+		diskUsage = -1
+		if detailedStatus == nil {
+			diskStatusReason = "no-status"
+		} else {
+			diskStatusReason = "agent-disabled"
+		}
 	}
 
 	if res.Status == "running" && detailedStatus != nil && detailedStatus.Agent.Value > 0 {
@@ -308,8 +335,7 @@ func (m *Monitor) pollEfficientQEMUResource(
 		})
 	}
 
-	agentExplicitlyOff := detailedStatus != nil && detailedStatus.Agent.Value == 0
-	if res.Status == "running" && !diskFromAgent && !agentExplicitlyOff {
+	if res.Status == "running" && !diskFromAgent && shouldCarryForwardQEMUDisk(diskStatusReason) {
 		if prev, ok := prevDiskByGuestID[guestID]; ok && prev.Usage > 0 && prev.Total > 0 && prev.Used >= 0 && prev.Used <= prev.Total {
 			diskTotal = uint64(prev.Total)
 			diskUsed = uint64(prev.Used)
@@ -318,6 +344,7 @@ func (m *Monitor) pollEfficientQEMUResource(
 			if prevVM, ok := prevVMByGuestID[guestID]; ok {
 				individualDisks = cloneGuestDisks(prevVM.Disks)
 			}
+			diskStatusReason = "prev-" + diskStatusReason
 			log.Debug().
 				Str("instance", instanceName).
 				Str("vm", res.Name).
@@ -430,6 +457,7 @@ func (m *Monitor) pollEfficientQEMUResource(
 			Usage: diskUsage,
 		},
 		Disks:             individualDisks,
+		DiskStatusReason:  diskStatusReason,
 		IPAddresses:       ipAddresses,
 		OSName:            osName,
 		OSVersion:         osVersion,

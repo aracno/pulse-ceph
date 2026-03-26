@@ -7339,6 +7339,7 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 		networkOutBytes := int64(res.NetOut)
 		var individualDisks []models.Disk // Store individual filesystems for multi-disk monitoring
 		diskFromAgent := false            // Set true when guest agent successfully provided disk data
+		diskStatusReason := ""
 		var ipAddresses []string
 		var networkInterfaces []models.GuestNetworkInterface
 		var osName, osVersion, agentVersion string
@@ -7375,6 +7376,11 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 			// Set to -1 to indicate "unknown" rather than showing misleading 0%
 			if res.Type == "qemu" && diskUsed == 0 && diskTotal > 0 && res.Status == "running" {
 				diskUsage = -1
+				diskStatusReason = "no-data"
+			}
+			if res.Status != "running" && diskTotal > 0 {
+				diskUsage = -1
+				diskStatusReason = "vm-stopped"
 			}
 
 			// For running VMs, always try to get filesystem info from guest agent
@@ -7450,6 +7456,10 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 						Str("vm", res.Name).
 						Int("vmid", res.VMID).
 						Msg("Could not get VM status, using cluster/resources disk data")
+					if diskTotal > 0 {
+						diskUsage = -1
+						diskStatusReason = "no-status"
+					}
 				}
 			}
 
@@ -7563,6 +7573,10 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 							}
 						}
 						if err != nil {
+							diskStatusReason = classifyGuestAgentDiskStatusError(err)
+							if diskTotal > 0 {
+								diskUsage = -1
+							}
 							// Log more helpful error messages based on the error type
 							errMsg := err.Error()
 							if strings.Contains(errMsg, "500") || strings.Contains(errMsg, "QEMU guest agent is not running") {
@@ -7617,6 +7631,10 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 									Msg("Failed to get filesystem info from guest agent")
 							}
 						} else if len(fsInfo) == 0 {
+							diskStatusReason = "no-filesystems"
+							if diskTotal > 0 {
+								diskUsage = -1
+							}
 							log.Info().
 								Str("instance", instanceName).
 								Str("vm", res.Name).
@@ -7804,6 +7822,7 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 								diskFree = totalBytes - usedBytes
 								diskUsage = safePercentage(float64(usedBytes), float64(totalBytes))
 								diskFromAgent = true
+								diskStatusReason = ""
 
 								log.Debug().
 									Str("instance", instanceName).
@@ -7823,6 +7842,7 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 								if diskTotal > 0 {
 									diskUsage = -1 // Show as allocated size
 								}
+								diskStatusReason = "special-filesystems-only"
 								log.Info().
 									Str("instance", instanceName).
 									Str("vm", res.Name).
@@ -7849,6 +7869,13 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 						agentVersion = guestAgentVersion
 					}
 				})
+			} else if res.Status == "running" && diskTotal > 0 {
+				diskUsage = -1
+				if detailedStatus == nil {
+					diskStatusReason = "no-status"
+				} else {
+					diskStatusReason = "agent-disabled"
+				}
 			}
 
 			// Carry forward previous disk data when the guest agent was expected
@@ -7860,8 +7887,7 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 			// false but the VM had real disk data last cycle).
 			// Skip when we know the agent is explicitly disabled — that's a
 			// permanent state and stale data shouldn't persist indefinitely.
-			agentExplicitlyOff := detailedStatus != nil && detailedStatus.Agent.Value == 0
-			if res.Status == "running" && res.Type == "qemu" && !diskFromAgent && !agentExplicitlyOff {
+			if res.Status == "running" && res.Type == "qemu" && !diskFromAgent && shouldCarryForwardQEMUDisk(diskStatusReason) {
 				if prev, ok := prevDiskByGuestID[guestID]; ok && prev.Usage > 0 && prev.Total > 0 && prev.Used >= 0 && prev.Used <= prev.Total {
 					diskTotal = uint64(prev.Total)
 					diskUsed = uint64(prev.Used)
@@ -7870,6 +7896,7 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 					if prevVM, ok := prevVMByGuestID[guestID]; ok {
 						individualDisks = cloneGuestDisks(prevVM.Disks)
 					}
+					diskStatusReason = "prev-" + diskStatusReason
 					log.Debug().
 						Str("instance", instanceName).
 						Str("vm", res.Name).
@@ -7996,6 +8023,7 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 					Free:  int64(diskFree),
 					Usage: diskUsage,
 				},
+				DiskStatusReason:  diskStatusReason,
 				Disks:             individualDisks, // Individual filesystem data
 				IPAddresses:       ipAddresses,
 				OSName:            osName,
