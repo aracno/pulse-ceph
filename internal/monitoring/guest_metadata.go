@@ -47,6 +47,13 @@ type guestMetadataCacheEntry struct {
 	osInfoSkip         bool // Skip OS info calls after repeated failures (refs #692)
 }
 
+func cloneGuestDisks(src []models.Disk) []models.Disk {
+	if len(src) == 0 {
+		return nil
+	}
+	return append([]models.Disk(nil), src...)
+}
+
 func (m *Monitor) tryReserveGuestMetadataFetch(key string, now time.Time) bool {
 	if m == nil {
 		return false
@@ -354,10 +361,24 @@ func (m *Monitor) fetchGuestAgentMetadata(ctx context.Context, client PVEClientI
 			Err(err).
 			Msg("Guest agent network interfaces unavailable")
 	} else if ifaces, ok := interfaces.([]proxmox.VMNetworkInterface); ok && len(ifaces) > 0 {
-		ipAddresses, networkIfaces = processGuestNetworkInterfaces(ifaces)
+		processedIPs, processedIfaces := processGuestNetworkInterfaces(ifaces)
+		if len(processedIPs) > 0 || len(processedIfaces) > 0 {
+			ipAddresses, networkIfaces = processedIPs, processedIfaces
+		} else if len(cached.ipAddresses) == 0 && len(cached.networkInterfaces) == 0 {
+			ipAddresses = nil
+			networkIfaces = nil
+		} else {
+			log.Debug().
+				Str("instance", instanceName).
+				Str("vm", vmName).
+				Int("vmid", vmid).
+				Msg("Guest agent returned empty network metadata; preserving last known interfaces")
+		}
 	} else {
-		ipAddresses = nil
-		networkIfaces = nil
+		if len(cached.ipAddresses) == 0 && len(cached.networkInterfaces) == 0 {
+			ipAddresses = nil
+			networkIfaces = nil
+		}
 	}
 
 	// OS info with configurable timeout and retry (refs #592)
@@ -400,10 +421,13 @@ func (m *Monitor) fetchGuestAgentMetadata(ctx context.Context, client PVEClientI
 				}
 			}
 		} else if agentInfo, ok := agentInfoRaw.(map[string]interface{}); ok && len(agentInfo) > 0 {
-			osName, osVersion = extractGuestOSInfo(agentInfo)
+			extractedOSName, extractedOSVersion := extractGuestOSInfo(agentInfo)
+			if extractedOSName != "" || extractedOSVersion != "" {
+				osName, osVersion = extractedOSName, extractedOSVersion
+			}
 			osInfoFailureCount = 0 // Reset on success
 			osInfoSkip = false
-		} else {
+		} else if cached.osName == "" && cached.osVersion == "" {
 			osName = ""
 			osVersion = ""
 		}
@@ -429,7 +453,7 @@ func (m *Monitor) fetchGuestAgentMetadata(ctx context.Context, client PVEClientI
 			Msg("Guest agent version unavailable")
 	} else if version, ok := versionRaw.(string); ok && version != "" {
 		agentVersion = version
-	} else {
+	} else if cached.agentVersion == "" {
 		agentVersion = ""
 	}
 

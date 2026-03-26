@@ -7867,7 +7867,9 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 					diskUsed = uint64(prev.Used)
 					diskFree = diskTotal - diskUsed
 					diskUsage = prev.Usage
-					individualDisks = nil // Don't carry forward stale per-disk breakdown
+					if prevVM, ok := prevVMByGuestID[guestID]; ok {
+						individualDisks = cloneGuestDisks(prevVM.Disks)
+					}
 					log.Debug().
 						Str("instance", instanceName).
 						Str("vm", res.Name).

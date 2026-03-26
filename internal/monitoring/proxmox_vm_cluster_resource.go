@@ -315,7 +315,9 @@ func (m *Monitor) pollEfficientQEMUResource(
 			diskUsed = uint64(prev.Used)
 			diskFree = diskTotal - diskUsed
 			diskUsage = prev.Usage
-			individualDisks = nil
+			if prevVM, ok := prevVMByGuestID[guestID]; ok {
+				individualDisks = cloneGuestDisks(prevVM.Disks)
+			}
 			log.Debug().
 				Str("instance", instanceName).
 				Str("vm", res.Name).

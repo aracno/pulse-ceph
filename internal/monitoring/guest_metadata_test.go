@@ -11,6 +11,22 @@ import (
 	"github.com/rcourtman/pulse-go-rewrite/pkg/proxmox"
 )
 
+type emptyGuestMetadataClient struct {
+	stubPVEClient
+}
+
+func (emptyGuestMetadataClient) GetVMNetworkInterfaces(ctx context.Context, node string, vmid int) ([]proxmox.VMNetworkInterface, error) {
+	return []proxmox.VMNetworkInterface{}, nil
+}
+
+func (emptyGuestMetadataClient) GetVMAgentInfo(ctx context.Context, node string, vmid int) (map[string]interface{}, error) {
+	return map[string]interface{}{}, nil
+}
+
+func (emptyGuestMetadataClient) GetVMAgentVersion(ctx context.Context, node string, vmid int) (string, error) {
+	return "", nil
+}
+
 func TestGuestMetadataCacheKey(t *testing.T) {
 	t.Parallel()
 
@@ -716,6 +732,62 @@ func TestRetryGuestAgentCall(t *testing.T) {
 			t.Fatalf("expected 1 call with maxRetries=0, got %d", callCount)
 		}
 	})
+}
+
+func TestFetchGuestAgentMetadataPreservesCachedValuesOnEmptyResponses(t *testing.T) {
+	t.Parallel()
+
+	key := guestMetadataCacheKey("pve", "node1", 100)
+	cachedFetchedAt := time.Now().Add(-guestMetadataCacheTTL - time.Minute)
+	monitor := &Monitor{
+		guestMetadataCache: map[string]guestMetadataCacheEntry{
+			key: {
+				ipAddresses: []string{"192.168.1.10"},
+				networkInterfaces: []models.GuestNetworkInterface{
+					{Name: "eth0", MAC: "00:11:22:33:44:55", Addresses: []string{"192.168.1.10"}},
+				},
+				osName:       "Ubuntu",
+				osVersion:    "24.04",
+				agentVersion: "8.2.0",
+				fetchedAt:    cachedFetchedAt,
+			},
+		},
+		guestMetadataLimiter: make(map[string]time.Time),
+	}
+
+	gotIPs, gotIfaces, gotOSName, gotOSVersion, gotAgentVersion := monitor.fetchGuestAgentMetadata(
+		context.Background(),
+		&emptyGuestMetadataClient{},
+		"pve",
+		"node1",
+		"vm100",
+		100,
+		&proxmox.VMStatus{Agent: proxmox.VMAgentField{Value: 1}},
+	)
+
+	if len(gotIPs) != 1 || gotIPs[0] != "192.168.1.10" {
+		t.Fatalf("expected cached IPs to be preserved, got %#v", gotIPs)
+	}
+	if len(gotIfaces) != 1 || gotIfaces[0].Name != "eth0" {
+		t.Fatalf("expected cached interfaces to be preserved, got %#v", gotIfaces)
+	}
+	if gotOSName != "Ubuntu" || gotOSVersion != "24.04" {
+		t.Fatalf("expected cached OS info to be preserved, got %q %q", gotOSName, gotOSVersion)
+	}
+	if gotAgentVersion != "8.2.0" {
+		t.Fatalf("expected cached agent version to be preserved, got %q", gotAgentVersion)
+	}
+
+	updated := monitor.guestMetadataCache[key]
+	if len(updated.ipAddresses) != 1 || updated.ipAddresses[0] != "192.168.1.10" {
+		t.Fatalf("expected cache IPs to remain populated, got %#v", updated.ipAddresses)
+	}
+	if len(updated.networkInterfaces) != 1 || updated.networkInterfaces[0].Name != "eth0" {
+		t.Fatalf("expected cache interfaces to remain populated, got %#v", updated.networkInterfaces)
+	}
+	if updated.fetchedAt.Before(cachedFetchedAt) {
+		t.Fatalf("expected cache timestamp to be refreshed, old=%v new=%v", cachedFetchedAt, updated.fetchedAt)
+	}
 }
 
 func TestAcquireGuestMetadataSlot(t *testing.T) {

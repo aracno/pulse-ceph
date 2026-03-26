@@ -223,7 +223,9 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 	// Build a lookup for previous disk data so we can carry it forward when the
 	// guest agent call fails (prevents disk usage flickering 57% → 0% → 57%).
 	prevDiskByGuestID := make(map[string]models.Disk, len(prevInstanceVMs))
+	prevVMByGuestID := make(map[string]models.VM, len(prevInstanceVMs))
 	for _, pvm := range prevInstanceVMs {
+		prevVMByGuestID[pvm.ID] = pvm
 		if pvm.Disk.Usage > 0 {
 			prevDiskByGuestID[pvm.ID] = pvm.Disk
 		}
@@ -797,7 +799,9 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 						diskUsed = uint64(prev.Used)
 						diskFree = diskTotal - diskUsed
 						diskUsage = prev.Usage
-						individualDisks = nil // Don't carry forward stale per-disk breakdown
+						if prevVM, ok := prevVMByGuestID[guestID]; ok {
+							individualDisks = cloneGuestDisks(prevVM.Disks)
+						}
 						if logging.IsLevelEnabled(zerolog.DebugLevel) {
 							log.Debug().
 								Str("instance", instanceName).
