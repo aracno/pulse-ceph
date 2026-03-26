@@ -650,7 +650,7 @@ const DockerHostGroupHeader: Component<{
   );
 };
 
-const DockerContainerRow: Component<{
+export const DockerContainerRow: Component<{
   row: Extract<DockerRow, { kind: 'container' }>;
   isMobile: Accessor<boolean>;
   showHostContext?: boolean;
@@ -1073,7 +1073,7 @@ const DockerContainerRow: Component<{
       </tr>
 
       <UrlEditPopover
-        isOpen={urlEdit.isEditing() && urlEdit.editingId() === container.id}
+        isOpen={urlEdit.isEditing() && urlEdit.editingId() === metadataId()}
         value={urlEdit.editingValue()}
         position={urlEdit.position()}
         isSaving={urlEdit.isSaving()}
@@ -2046,15 +2046,32 @@ const areTasksEqual = (a: DockerTask[], b: DockerTask[]) => {
   return true;
 };
 
+const buildDockerMetadataSignature = (hosts: DockerHost[]): string =>
+  hosts
+    .flatMap((host) => {
+      const containerKeys = (host.containers || []).map(
+        (container) => `${host.id}:container:${container.id}`,
+      );
+      const serviceKeys = (host.services || []).map(
+        (service) => `${host.id}:service:${service.id || service.name || ''}`,
+      );
+      return [host.id, ...containerKeys, ...serviceKeys];
+    })
+    .sort()
+    .join('|');
+
 const DockerUnifiedTable: Component<DockerUnifiedTableProps> = (props) => {
   // Use the breakpoint hook for responsive behavior
   const { isMobile } = useBreakpoint();
 
   // Docker resource metadata for tracking custom URLs
   const [guestMetadata, setGuestMetadata] = createSignal<DockerMetadataRecord>(getDockerGuestMetadataCache());
+  const resourceIdentitySignature = createMemo(() =>
+    buildDockerMetadataSignature(props.hosts || []),
+  );
+  let lastLoadedResourceSignature: string | null = null;
 
-  // Load guest metadata on mount
-  onMount(async () => {
+  const refreshGuestMetadata = async () => {
     try {
       const metadata = await DockerMetadataAPI.getAllMetadata();
       setGuestMetadata(metadata ?? {});
@@ -2062,16 +2079,22 @@ const DockerUnifiedTable: Component<DockerUnifiedTableProps> = (props) => {
     } catch (err) {
       logger.debug('Failed to load Docker metadata', err);
     }
+  };
 
+  createEffect(() => {
+    const signature = resourceIdentitySignature();
+    if (signature === lastLoadedResourceSignature) {
+      return;
+    }
+    lastLoadedResourceSignature = signature;
+    void refreshGuestMetadata();
+  });
+
+  // Load guest metadata on mount
+  onMount(() => {
     // Listen for metadata changes from other sources (e.g., AI, other tabs)
     const handleMetadataChanged = async () => {
-      try {
-        const metadata = await DockerMetadataAPI.getAllMetadata();
-        setGuestMetadata(metadata ?? {});
-        setDockerGuestMetadataCache(metadata ?? {});
-      } catch (err) {
-        logger.debug('Failed to refresh Docker metadata', err);
-      }
+      await refreshGuestMetadata();
     };
 
     window.addEventListener('pulse:metadata-changed', handleMetadataChanged);
