@@ -1428,13 +1428,13 @@ type VMFileSystem struct {
 
 func (fs *VMFileSystem) UnmarshalJSON(data []byte) error {
 	type rawVMFileSystem struct {
-		Name                 string        `json:"name"`
-		Type                 string        `json:"type"`
-		Mountpoint           string        `json:"mountpoint"`
-		TotalBytes           interface{}   `json:"total-bytes"`
-		TotalBytesPrivileged interface{}   `json:"total-bytes-privileged"`
-		UsedBytes            interface{}   `json:"used-bytes"`
-		DiskRaw              []interface{} `json:"disk"`
+		Name                 string      `json:"name"`
+		Type                 string      `json:"type"`
+		Mountpoint           string      `json:"mountpoint"`
+		TotalBytes           interface{} `json:"total-bytes"`
+		TotalBytesPrivileged interface{} `json:"total-bytes-privileged"`
+		UsedBytes            interface{} `json:"used-bytes"`
+		DiskRaw              interface{} `json:"disk"`
 	}
 
 	var raw rawVMFileSystem
@@ -1469,9 +1469,22 @@ func (fs *VMFileSystem) UnmarshalJSON(data []byte) error {
 	fs.TotalBytes = total
 	fs.TotalBytesPrivileged = totalPrivileged
 	fs.UsedBytes = used
-	fs.DiskRaw = raw.DiskRaw
+	fs.DiskRaw = normalizeVMFilesystemDiskRaw(raw.DiskRaw)
 	fs.Disk = ""
 	return nil
+}
+
+func normalizeVMFilesystemDiskRaw(value interface{}) []interface{} {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case []interface{}:
+		return v
+	case map[string]interface{}:
+		return []interface{}{v}
+	default:
+		return nil
+	}
 }
 
 func normalizeWindowsDriveMountpoint(value string) (string, bool) {

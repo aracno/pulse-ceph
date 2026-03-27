@@ -276,6 +276,20 @@ func TestVMFileSystemUnmarshalFlexibleNumbers(t *testing.T) {
 			t.Fatalf("expected windows mountpoint fallback from name, got %q", fs.Mountpoint)
 		}
 	})
+
+	t.Run("accepts disk metadata as an object", func(t *testing.T) {
+		payload := `{"name":"rootfs","type":"ext4","mountpoint":"/","total-bytes":1000,"used-bytes":200,"disk":{"dev":"/dev/sda"}}`
+		var fs VMFileSystem
+		if err := json.Unmarshal([]byte(payload), &fs); err != nil {
+			t.Fatalf("unexpected error unmarshalling disk object: %v", err)
+		}
+		if len(fs.DiskRaw) != 1 {
+			t.Fatalf("expected disk metadata object to normalize to one entry, got %d", len(fs.DiskRaw))
+		}
+		if diskMap, ok := fs.DiskRaw[0].(map[string]interface{}); !ok || diskMap["dev"] != "/dev/sda" {
+			t.Fatalf("expected normalized disk metadata to preserve dev, got %#v", fs.DiskRaw[0])
+		}
+	})
 }
 
 func TestVMFileSystemUnmarshalJSON_InvalidValues(t *testing.T) {
