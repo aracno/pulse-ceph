@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rcourtman/pulse-go-rewrite/internal/models"
+	"github.com/rcourtman/pulse-go-rewrite/pkg/proxmox"
 )
 
 const (
@@ -94,4 +95,22 @@ func shouldCarryForwardHealthyGuestLowTrustVMMemory(prev models.VM, currentStatu
 	}
 
 	return true
+}
+
+func guestAgentSignalsHealthy(
+	detailedStatus *proxmox.VMStatus,
+	diskFromAgent bool,
+	ipAddresses []string,
+	networkInterfaces []models.GuestNetworkInterface,
+	osName, osVersion, agentVersion string,
+) bool {
+	if detailedStatus != nil && detailedStatus.Agent.Value > 0 {
+		return true
+	}
+	return diskFromAgent ||
+		len(ipAddresses) > 0 ||
+		len(networkInterfaces) > 0 ||
+		osName != "" ||
+		osVersion != "" ||
+		agentVersion != ""
 }

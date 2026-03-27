@@ -7990,7 +7990,7 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 			sampleTime := time.Now()
 			var memory models.Memory
 			snapshotNotes := []string(nil)
-			guestAgentHealthy := diskFromAgent || len(ipAddresses) > 0 || len(networkInterfaces) > 0 || osName != "" || osVersion != "" || agentVersion != ""
+			guestAgentHealthy := guestAgentSignalsHealthy(detailedStatus, diskFromAgent, ipAddresses, networkInterfaces, osName, osVersion, agentVersion)
 			if prev, ok := prevVMByGuestID[guestID]; ok {
 				switch {
 				case shouldCarryForwardHealthyGuestLowTrustVMMemory(prev, res.Status, memorySource, memTotal, memUsed, sampleTime, guestAgentHealthy):

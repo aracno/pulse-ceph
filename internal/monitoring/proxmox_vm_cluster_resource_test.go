@@ -691,7 +691,63 @@ func TestPollVMsAndContainersEfficientStabilizesSuspiciousRepeatedLowTrustMemory
 	if snapshot.MemorySource != "previous-snapshot" || snapshot.Memory.Used != 3<<30 {
 		t.Fatalf("snapshot memory = %#v source=%q, want preserved previous reading", snapshot.Memory, snapshot.MemorySource)
 	}
-	if !snapshotHasNote(stabilizedSnapshot.Notes, "preserved-previous-memory-after-repeated-low-trust-pattern") {
-		t.Fatalf("vm102 snapshot notes = %#v, want stabilization note", stabilizedSnapshot.Notes)
+	if !snapshotHasNote(stabilizedSnapshot.Notes, "preserved-previous-memory-after-repeated-low-trust-pattern") &&
+		!snapshotHasNote(stabilizedSnapshot.Notes, "preserved-previous-memory-for-healthy-guest-low-trust-full-usage") {
+		t.Fatalf("vm102 snapshot notes = %#v, want preservation note", stabilizedSnapshot.Notes)
+	}
+}
+
+func TestPollVMsAndContainersEfficientTreatsAvailableGuestAgentAsHealthyForMemoryCarryForward(t *testing.T) {
+	t.Setenv("PULSE_DATA_DIR", t.TempDir())
+
+	const total = uint64(8 << 30)
+	client := &repeatedLowTrustMemoryClusterClient{
+		resources: []proxmox.ClusterResource{
+			{Type: "qemu", Node: "node1", VMID: 100, Name: "vm100", Status: "running", MaxMem: total, Mem: total, MaxCPU: 4},
+		},
+		vmStatuses: map[int]*proxmox.VMStatus{
+			100: {Status: "running", MaxMem: total, Mem: total, Agent: proxmox.VMAgentField{Value: 1}},
+		},
+	}
+
+	mon := newTestPVEMonitor("pve1")
+	defer mon.alertManager.Stop()
+	defer mon.notificationMgr.Stop()
+
+	mon.rateTracker = NewRateTracker()
+	mon.guestMetadataCache = make(map[string]guestMetadataCacheEntry)
+	mon.guestMetadataLimiter = make(map[string]time.Time)
+	mon.vmRRDMemCache = make(map[string]rrdMemCacheEntry)
+	mon.vmAgentMemCache = make(map[string]agentMemCacheEntry)
+	mon.guestAgentWorkSlots = make(chan struct{}, 4)
+
+	now := time.Now()
+	mon.state.UpdateVMs([]models.VM{
+		{
+			ID:           makeGuestID("pve1", "node1", 100),
+			VMID:         100,
+			Name:         "vm100",
+			Node:         "node1",
+			Instance:     "pve1",
+			Type:         "qemu",
+			Status:       "running",
+			MemorySource: "previous-snapshot",
+			Memory:       models.Memory{Total: int64(total), Used: 3 << 30, Free: 5 << 30, Usage: safePercentage(float64(3<<30), float64(total))},
+			LastSeen:     now,
+		},
+	})
+
+	if ok := mon.pollVMsAndContainersEfficient(context.Background(), "pve1", "", false, client, map[string]string{"node1": "online"}); !ok {
+		t.Fatal("pollVMsAndContainersEfficient() returned false")
+	}
+
+	state := mon.state.GetSnapshot()
+	if len(state.VMs) != 1 {
+		t.Fatalf("expected 1 VM, got %d", len(state.VMs))
+	}
+
+	vm := state.VMs[0]
+	if vm.MemorySource != "previous-snapshot" || vm.Memory.Used != 3<<30 {
+		t.Fatalf("vm memory = %#v source=%q, want preserved previous reading", vm.Memory, vm.MemorySource)
 	}
 }
