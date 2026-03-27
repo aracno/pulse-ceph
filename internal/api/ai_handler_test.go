@@ -196,7 +196,9 @@ func TestStart(t *testing.T) {
 	defer func() { newChatService = oldNewService }()
 
 	mockSvc := new(MockAIService)
+	var capturedCfg chat.Config
 	newChatService = func(cfg chat.Config) AIService {
+		capturedCfg = cfg
 		return mockSvc
 	}
 
@@ -217,6 +219,7 @@ func TestStart(t *testing.T) {
 	err = h.Start(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.Equal(t, mockSvc, h.legacyService)
+	assert.Equal(t, "data", capturedCfg.DataDir)
 }
 
 func TestStop(t *testing.T) {
@@ -271,6 +274,61 @@ func TestRestart(t *testing.T) {
 	h.legacyService = nil
 	err = h.Restart(context.Background())
 	assert.NoError(t, err)
+}
+
+func TestRestart_StartsStoppedServiceWithSavedStateProvider(t *testing.T) {
+	oldNewService := newChatService
+	defer func() { newChatService = oldNewService }()
+
+	mockPersist := &MockAIPersistence{dataDir: "data"}
+	stoppedSvc := new(MockAIService)
+	startedSvc := new(MockAIService)
+	mockState := new(MockAIStateProvider)
+	var capturedCfg chat.Config
+
+	newChatService = func(cfg chat.Config) AIService {
+		capturedCfg = cfg
+		return startedSvc
+	}
+
+	h := newTestAIHandler(nil, mockPersist, nil)
+	h.legacyService = stoppedSvc
+	h.SetStateProvider(mockState)
+
+	aiCfg := &config.AIConfig{Enabled: true, Model: "test"}
+	mockPersist.On("LoadAIConfig").Return(aiCfg, nil).Once()
+	stoppedSvc.On("IsRunning").Return(false).Once()
+	startedSvc.On("Start", mock.Anything).Return(nil).Once()
+
+	err := h.Restart(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, startedSvc, h.legacyService)
+	assert.Same(t, mockState, capturedCfg.StateProvider)
+	assert.Equal(t, "data", capturedCfg.DataDir)
+}
+
+func TestStart_AllowsEmptyPersistenceDataDir(t *testing.T) {
+	oldNewService := newChatService
+	defer func() { newChatService = oldNewService }()
+
+	mockSvc := new(MockAIService)
+	mockState := new(MockAIStateProvider)
+	mockPersist := &MockAIPersistence{}
+	var capturedCfg chat.Config
+	newChatService = func(cfg chat.Config) AIService {
+		capturedCfg = cfg
+		return mockSvc
+	}
+
+	h := newTestAIHandler(&config.Config{}, mockPersist, nil)
+	mockPersist.On("LoadAIConfig").Return(&config.AIConfig{Enabled: true, Model: "test"}, nil).Once()
+
+	mockSvc.On("Start", mock.Anything).Return(nil).Once()
+
+	err := h.Start(context.Background(), mockState)
+	assert.NoError(t, err)
+	assert.Equal(t, "", capturedCfg.DataDir)
+	assert.Same(t, mockState, capturedCfg.StateProvider)
 }
 
 func TestGetService(t *testing.T) {

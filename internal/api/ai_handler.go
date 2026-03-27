@@ -227,6 +227,13 @@ func (h *AIHandler) getDataDir(aiCfg *config.AIConfig, baseDir string) string {
 	return dataDir
 }
 
+func normalizeAIOrgID(orgID string) string {
+	if orgID == "" {
+		return "default"
+	}
+	return orgID
+}
+
 func (h *AIHandler) getConfig(ctx context.Context) *config.Config {
 	orgID := GetOrgID(ctx)
 	if h.mtMonitor != nil {
@@ -281,6 +288,20 @@ func (h *AIHandler) SetMultiTenantMonitor(mtm *monitoring.MultiTenantMonitor) {
 	h.mtMonitor = mtm
 }
 
+// SetStateProvider stores the current infrastructure state provider for the
+// default v5 runtime so the chat service can be started later via Restart().
+func (h *AIHandler) SetStateProvider(provider AIStateProvider) {
+	h.stateProvidersMu.Lock()
+	defer h.stateProvidersMu.Unlock()
+
+	orgID := normalizeAIOrgID("")
+	if provider == nil {
+		delete(h.stateProviders, orgID)
+		return
+	}
+	h.stateProviders[orgID] = provider
+}
+
 // StateProvider interface for infrastructure state
 type AIStateProvider interface {
 	GetState() models.StateSnapshot
@@ -299,9 +320,20 @@ func (h *AIHandler) Start(ctx context.Context, stateProvider AIStateProvider) er
 		return nil
 	}
 
+	orgID := normalizeAIOrgID(GetOrgID(ctx))
+	if stateProvider != nil {
+		h.stateProvidersMu.Lock()
+		h.stateProviders[orgID] = stateProvider
+		h.stateProvidersMu.Unlock()
+	}
+
 	// Determine data directory
 	persistence := h.getPersistence(ctx)
-	dataDir := h.getDataDir(aiCfg, persistence.DataDir())
+	baseDir := ""
+	if persistence != nil {
+		baseDir = persistence.DataDir()
+	}
+	dataDir := h.getDataDir(aiCfg, baseDir)
 
 	// Create chat config
 	chatCfg := chat.Config{
@@ -358,9 +390,9 @@ func (h *AIHandler) Restart(ctx context.Context) error {
 
 			var sp AIStateProvider
 			h.stateProvidersMu.RLock()
-			for _, p := range h.stateProviders {
-				sp = p
-				break
+			sp = h.stateProviders[normalizeAIOrgID(GetOrgID(ctx))]
+			if sp == nil {
+				sp = h.stateProviders["default"]
 			}
 			h.stateProvidersMu.RUnlock()
 

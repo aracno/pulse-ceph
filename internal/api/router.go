@@ -1498,6 +1498,9 @@ func (r *Router) setupRoutes() {
 	// AI chat handler
 	r.aiHandler = NewAIHandler(r.multiTenant, r.mtMonitor, r.agentExecServer)
 	r.aiHandler.SetLegacyRuntime(r.config, r.persistence)
+	if r.monitor != nil {
+		r.aiHandler.SetStateProvider(r.monitor)
+	}
 
 	// AI-powered infrastructure discovery handlers
 	// Note: The actual service is wired up later via SetDiscoveryService
@@ -2171,8 +2174,10 @@ func (r *Router) SetMonitor(m *monitoring.Monitor) {
 			log.Warn().Msg("[Router] resourceHandlers is nil, cannot inject resource store")
 		}
 
-		// Set state provider on AI handler so patrol service gets created
-		// (Critical: patrol service is created lazily in SetStateProvider)
+		// Keep both AI settings and chat restart paths pointed at the live monitor.
+		if r.aiHandler != nil {
+			r.aiHandler.SetStateProvider(m)
+		}
 		if r.aiSettingsHandler != nil {
 			r.aiSettingsHandler.SetStateProvider(m)
 			// Also inject alert provider and resolver now that monitor is available
