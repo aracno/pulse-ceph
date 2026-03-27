@@ -152,6 +152,27 @@ func TestSelectVMLowTrustUsedMemory(t *testing.T) {
 			wantSource: "status-freemem",
 		},
 		{
+			name:     "uses balloon total when deriving used from status freemem",
+			memTotal: 8 * giB,
+			status: &proxmox.VMStatus{
+				Balloon: 4 * giB,
+				FreeMem: 1 * giB,
+			},
+			wantUsed:   3 * giB,
+			wantSource: "status-freemem",
+		},
+		{
+			name:     "uses balloon total when status mem is falsely saturated against balloon",
+			memTotal: 8 * giB,
+			status: &proxmox.VMStatus{
+				Mem:     4 * giB,
+				Balloon: 4 * giB,
+				FreeMem: 1 * giB,
+			},
+			wantUsed:   3 * giB,
+			wantSource: "status-freemem",
+		},
+		{
 			name:       "returns empty selection without usable fields",
 			memTotal:   8 * giB,
 			status:     &proxmox.VMStatus{},

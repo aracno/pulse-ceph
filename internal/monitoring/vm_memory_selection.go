@@ -20,6 +20,16 @@ type vmLowTrustUsedSelection struct {
 	Source string
 }
 
+func effectiveVMLowTrustFreeMemTotal(memTotal uint64, status *proxmox.VMStatus) uint64 {
+	if status == nil {
+		return memTotal
+	}
+	if status.Balloon > 0 && status.Balloon <= memTotal && status.FreeMem <= status.Balloon {
+		return status.Balloon
+	}
+	return memTotal
+}
+
 // selectVMAvailableFromMemInfo evaluates VM meminfo data from the QEMU guest
 // agent and returns:
 // - a primary cache-aware memAvailable value when meminfo is trustworthy
@@ -96,19 +106,20 @@ func selectVMLowTrustUsedMemory(memTotal uint64, status *proxmox.VMStatus) vmLow
 		return vmLowTrustUsedSelection{}
 	}
 
-	hasFreeFallback := status.FreeMem > 0 && memTotal >= status.FreeMem
+	freeMemTotal := effectiveVMLowTrustFreeMemTotal(memTotal, status)
+	hasFreeFallback := status.FreeMem > 0 && freeMemTotal >= status.FreeMem
 	freeDerivedUsed := uint64(0)
 	if hasFreeFallback {
-		freeDerivedUsed = memTotal - status.FreeMem
+		freeDerivedUsed = freeMemTotal - status.FreeMem
 	}
 
 	if status.Mem > 0 {
 		if hasFreeFallback && freeDerivedUsed < status.Mem {
 			statusMemPlusFree := saturatingAddUint64(status.Mem, status.FreeMem)
-			if status.Mem >= memTotal && freeDerivedUsed < memTotal {
+			if status.Mem >= freeMemTotal && freeDerivedUsed < freeMemTotal {
 				return vmLowTrustUsedSelection{Used: freeDerivedUsed, Source: "status-freemem"}
 			}
-			if statusMemPlusFree > memTotal+vmStatusMemoryMismatchTolerance {
+			if statusMemPlusFree > freeMemTotal+vmStatusMemoryMismatchTolerance {
 				return vmLowTrustUsedSelection{Used: freeDerivedUsed, Source: "status-freemem"}
 			}
 		}
