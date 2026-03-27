@@ -336,7 +336,7 @@ func (m *Monitor) retryGuestAgentCall(ctx context.Context, timeout time.Duration
 	return nil, lastErr
 }
 
-func (m *Monitor) fetchGuestAgentMetadata(ctx context.Context, client PVEClientInterface, instanceName, nodeName, vmName string, vmid int, vmStatus *proxmox.VMStatus) ([]string, []models.GuestNetworkInterface, string, string, string) {
+func (m *Monitor) fetchGuestAgentMetadata(ctx context.Context, client PVEClientInterface, instanceName, nodeName, vmName string, vmid int, vmStatus *proxmox.VMStatus, allowWithoutStatus bool) ([]string, []models.GuestNetworkInterface, string, string, string) {
 	key := guestMetadataCacheKey(instanceName, nodeName, vmid)
 	now := time.Now()
 
@@ -344,7 +344,8 @@ func (m *Monitor) fetchGuestAgentMetadata(ctx context.Context, client PVEClientI
 	cached, ok := m.guestMetadataCache[key]
 	m.guestMetadataMu.RUnlock()
 
-	if vmStatus == nil || client == nil || vmStatus.Agent.Value <= 0 {
+	agentAvailable := client != nil && ((vmStatus != nil && vmStatus.Agent.Value > 0) || allowWithoutStatus)
+	if !agentAvailable {
 		if ok && now.Sub(cached.fetchedAt) < guestMetadataCacheEntryTTL(cached) {
 			return cloneStringSlice(cached.ipAddresses), cloneGuestNetworkInterfaces(cached.networkInterfaces), cached.osName, cached.osVersion, cached.agentVersion
 		}

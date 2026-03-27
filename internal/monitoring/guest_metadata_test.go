@@ -876,6 +876,7 @@ func TestFetchGuestAgentMetadataPreservesCachedValuesOnEmptyResponses(t *testing
 		"vm100",
 		100,
 		&proxmox.VMStatus{Agent: proxmox.VMAgentField{Value: 1}},
+		false,
 	)
 
 	if len(gotIPs) != 1 || gotIPs[0] != "192.168.1.10" {
@@ -964,6 +965,7 @@ func TestFetchGuestAgentMetadataPreservesFreshCacheWhenAgentTemporarilyUnavailab
 			"vm100",
 			100,
 			nil,
+			false,
 		)
 
 		assertCachePreserved(t, monitor, gotIPs, gotIfaces, gotOSName, gotOSVersion, gotAgentVersion)
@@ -981,6 +983,7 @@ func TestFetchGuestAgentMetadataPreservesFreshCacheWhenAgentTemporarilyUnavailab
 			"vm100",
 			100,
 			&proxmox.VMStatus{Agent: proxmox.VMAgentField{Value: 0}},
+			false,
 		)
 
 		assertCachePreserved(t, monitor, gotIPs, gotIfaces, gotOSName, gotOSVersion, gotAgentVersion)
@@ -1056,6 +1059,7 @@ func TestFetchGuestAgentMetadataRetriesIdentityOnlyCacheSooner(t *testing.T) {
 		"vm100",
 		100,
 		status,
+		false,
 	)
 	if len(firstIPs) != 0 || len(firstIfaces) != 0 {
 		t.Fatalf("expected first fetch to be missing network metadata, got ips=%#v ifaces=%#v", firstIPs, firstIfaces)
@@ -1081,6 +1085,7 @@ func TestFetchGuestAgentMetadataRetriesIdentityOnlyCacheSooner(t *testing.T) {
 		"vm100",
 		100,
 		status,
+		false,
 	)
 
 	if len(secondIPs) == 0 || len(secondIfaces) == 0 {
@@ -1111,6 +1116,7 @@ func TestFetchGuestAgentMetadataRetriesIPOnlyCacheSooner(t *testing.T) {
 		"vm100",
 		100,
 		status,
+		false,
 	)
 	if len(firstIPs) != 1 || firstIPs[0] != "192.168.1.60" {
 		t.Fatalf("expected first fetch to preserve discovered IP, got %#v", firstIPs)
@@ -1136,6 +1142,7 @@ func TestFetchGuestAgentMetadataRetriesIPOnlyCacheSooner(t *testing.T) {
 		"vm100",
 		100,
 		status,
+		false,
 	)
 	if len(secondIPs) != 1 || secondIPs[0] != "192.168.1.60" {
 		t.Fatalf("expected second fetch to preserve IP, got %#v", secondIPs)
@@ -1167,6 +1174,7 @@ func TestFetchGuestAgentMetadataRetriesEmptyCacheSooner(t *testing.T) {
 		"vm100",
 		100,
 		status,
+		false,
 	)
 	if len(firstIPs) != 0 || len(firstIfaces) != 0 {
 		t.Fatalf("expected first fetch to be empty, got ips=%#v ifaces=%#v", firstIPs, firstIfaces)
@@ -1186,6 +1194,7 @@ func TestFetchGuestAgentMetadataRetriesEmptyCacheSooner(t *testing.T) {
 		"vm100",
 		100,
 		status,
+		false,
 	)
 	if len(secondIPs) != 1 || secondIPs[0] != "192.168.1.50" {
 		t.Fatalf("expected second fetch to refresh IPs, got %#v", secondIPs)

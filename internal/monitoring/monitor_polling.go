@@ -370,10 +370,14 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 				memRawFree := uint64(0) // Truly free memory (MemFree), for cache segment calculation
 				memInfoTotalMinusUsed := uint64(0)
 				rrdUsed := uint64(0)
-				agentEnabled := vm.Agent > 0
 				var ipAddresses []string
 				var networkInterfaces []models.GuestNetworkInterface
 				var osName, osVersion, guestAgentVersion string
+				var prevVM *models.VM
+				if prev, ok := prevVMByGuestID[guestID]; ok {
+					prevVM = &prev
+				}
+				guestAgentAvailable := false
 
 				if vm.Status == "running" {
 					// Try to get detailed VM status (but don't wait too long)
@@ -386,7 +390,6 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 						guestRaw.Balloon = status.Balloon
 						guestRaw.BalloonMin = status.BalloonMin
 						guestRaw.Agent = status.Agent.Value
-						agentEnabled = status.Agent.Value > 0
 						if status.MemInfo != nil {
 							guestRaw.MemInfoUsed = status.MemInfo.Used
 							guestRaw.MemInfoFree = status.MemInfo.Free
@@ -427,13 +430,14 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 					}
 					cancel()
 				}
+				guestAgentAvailable = vm.Status == "running" && shouldQueryGuestAgent(vmStatus, prevVM, time.Now())
 
 				// Preferred fallback: read /proc/meminfo directly via the QEMU guest
 				// agent's file-read endpoint. This gives real-time MemAvailable which
 				// correctly excludes reclaimable buff/cache. Results are cached (60s
 				// positive, 5min negative) so this is cheap after the first call.
 				// Refs: #1270
-				if vm.Status == "running" && agentEnabled && memAvailable == 0 {
+				if guestAgentAvailable && memAvailable == 0 {
 					m.runGuestAgentVMWork(ctx, instanceName, n.Node, vm.Name, vm.VMID, func(agentCtx context.Context) {
 						if agentAvail, agentErr := m.getVMAgentMemAvailable(agentCtx, client, instanceName, n.Node, vm.VMID); agentErr == nil && agentAvail > 0 {
 							memAvailable = agentAvail
@@ -538,7 +542,7 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 
 				if vm.Status == "running" {
 					m.runGuestAgentVMWork(ctx, instanceName, n.Node, vm.Name, vm.VMID, func(agentCtx context.Context) {
-						guestIPs, guestIfaces, guestOSName, guestOSVersion, agentVersion := m.fetchGuestAgentMetadata(agentCtx, client, instanceName, n.Node, vm.Name, vm.VMID, vmStatus)
+						guestIPs, guestIfaces, guestOSName, guestOSVersion, agentVersion := m.fetchGuestAgentMetadata(agentCtx, client, instanceName, n.Node, vm.Name, vm.VMID, vmStatus, guestAgentAvailable)
 						if len(guestIPs) > 0 {
 							ipAddresses = guestIPs
 						}
@@ -607,21 +611,25 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 
 				// For running VMs, ALWAYS try to get filesystem info from guest agent
 				// The cluster/resources endpoint always returns 0 for disk usage
-				if vm.Status == "running" && vmStatus != nil && diskTotal > 0 {
+				if vm.Status == "running" && guestAgentAvailable && diskTotal > 0 {
 					// Log the initial state
+					agentValue := 0
+					if vmStatus != nil {
+						agentValue = vmStatus.Agent.Value
+					}
 					if logging.IsLevelEnabled(zerolog.DebugLevel) {
 						log.Debug().
 							Str("instance", instanceName).
 							Str("vm", vm.Name).
 							Int("vmid", vm.VMID).
-							Int("agent", vmStatus.Agent.Value).
+							Int("agent", agentValue).
 							Uint64("diskUsed", diskUsed).
 							Uint64("diskTotal", diskTotal).
 							Msg("VM has 0 disk usage, checking guest agent")
 					}
 
 					// Check if agent is enabled
-					if vmStatus.Agent.Value == 0 {
+					if vmStatus != nil && vmStatus.Agent.Value == 0 {
 						diskStatusReason = "agent-disabled"
 						if logging.IsLevelEnabled(zerolog.DebugLevel) {
 							log.Debug().
@@ -629,7 +637,7 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 								Str("vm", vm.Name).
 								Msg("Guest agent disabled in VM config")
 						}
-					} else if vmStatus.Agent.Value > 0 || diskUsed == 0 {
+					} else {
 						m.runGuestAgentVMWork(ctx, instanceName, n.Node, vm.Name, vm.VMID, func(agentCtx context.Context) {
 							if logging.IsLevelEnabled(zerolog.DebugLevel) {
 								log.Debug().
@@ -840,17 +848,15 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 								}
 							}
 						})
-					} else {
-						// No vmStatus available or agent disabled - show allocated disk
-						if diskTotal > 0 {
-							diskUsage = -1 // Show as allocated size
-							diskStatusReason = "no-agent"
-						}
 					}
 				} else if vm.Status == "running" && diskTotal > 0 {
 					// Running VM but no vmStatus - show allocated disk
 					diskUsage = -1
-					diskStatusReason = "no-status"
+					if guestAgentAvailable {
+						diskStatusReason = "agent-unavailable"
+					} else {
+						diskStatusReason = "no-status"
+					}
 				}
 
 				// Carry forward previous disk data when the guest agent failed this cycle.

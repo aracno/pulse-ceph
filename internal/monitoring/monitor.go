@@ -7387,6 +7387,11 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 		var ipAddresses []string
 		var networkInterfaces []models.GuestNetworkInterface
 		var osName, osVersion, agentVersion string
+		var prevVM *models.VM
+		if prev, ok := prevVMByGuestID[guestID]; ok {
+			prevVM = &prev
+		}
+		guestAgentAvailable := false
 
 		if res.Type == "qemu" {
 			// Skip templates — they are not monitored but track their VMID→node so backup
@@ -7408,7 +7413,6 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 			memRawFree := uint64(0) // Truly free memory (MemFree), for cache segment calculation
 			memInfoTotalMinusUsed := uint64(0)
 			rrdUsed := uint64(0)
-			agentEnabled := false
 
 			// Try to get actual disk usage from guest agent if VM is running
 			diskUsed := res.Disk
@@ -7450,7 +7454,6 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 					guestRaw.Balloon = detailedStatus.Balloon
 					guestRaw.BalloonMin = detailedStatus.BalloonMin
 					guestRaw.Agent = detailedStatus.Agent.Value
-					agentEnabled = detailedStatus.Agent.Value > 0
 					if detailedStatus.MemInfo != nil {
 						guestRaw.MemInfoUsed = detailedStatus.MemInfo.Used
 						guestRaw.MemInfoFree = detailedStatus.MemInfo.Free
@@ -7506,13 +7509,14 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 					}
 				}
 			}
+			guestAgentAvailable = res.Status == "running" && shouldQueryGuestAgent(detailedStatus, prevVM, time.Now())
 
 			// Preferred fallback: read /proc/meminfo directly via the QEMU guest
 			// agent's file-read endpoint. This gives real-time MemAvailable which
 			// correctly excludes reclaimable buff/cache. Results are cached (60s
 			// positive, 5min negative) so this is cheap after the first call.
 			// Refs: #1270
-			if res.Status == "running" && agentEnabled && memAvailable == 0 {
+			if guestAgentAvailable && memAvailable == 0 {
 				m.runGuestAgentVMWork(ctx, instanceName, res.Node, res.Name, res.VMID, func(agentCtx context.Context) {
 					if agentAvail, agentErr := m.getVMAgentMemAvailable(agentCtx, client, instanceName, res.Node, res.VMID); agentErr == nil && agentAvail > 0 {
 						memAvailable = agentAvail
@@ -7594,14 +7598,18 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 				}
 			}
 
-			if res.Status == "running" && agentEnabled {
+			if guestAgentAvailable {
 				m.runGuestAgentVMWork(ctx, instanceName, res.Node, res.Name, res.VMID, func(agentCtx context.Context) {
-					if detailedStatus != nil && detailedStatus.Agent.Value > 0 {
+					if guestAgentAvailable {
+						agentValue := 0
+						if detailedStatus != nil {
+							agentValue = detailedStatus.Agent.Value
+						}
 						log.Debug().
 							Str("instance", instanceName).
 							Str("vm", res.Name).
 							Int("vmid", res.VMID).
-							Int("agent", detailedStatus.Agent.Value).
+							Int("agent", agentValue).
 							Uint64("current_disk", diskUsed).
 							Uint64("current_maxdisk", diskTotal).
 							Msg("Guest agent enabled, querying filesystem info for accurate disk usage")
@@ -7896,7 +7904,7 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 						}
 					}
 
-					guestIPs, guestIfaces, guestOSName, guestOSVersion, guestAgentVersion := m.fetchGuestAgentMetadata(agentCtx, client, instanceName, res.Node, res.Name, res.VMID, detailedStatus)
+					guestIPs, guestIfaces, guestOSName, guestOSVersion, guestAgentVersion := m.fetchGuestAgentMetadata(agentCtx, client, instanceName, res.Node, res.Name, res.VMID, detailedStatus, guestAgentAvailable)
 					if len(guestIPs) > 0 {
 						ipAddresses = guestIPs
 					}
@@ -7927,8 +7935,8 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 			// always returns 0 for VM disk, so without the guest agent we'd show
 			// 0% or "allocated only", causing chart spikes when the agent
 			// intermittently times out. Refs: #1319
-			// Also triggers when GetVMStatus itself failed (agentEnabled stays
-			// false but the VM had real disk data last cycle).
+			// Also triggers when GetVMStatus itself failed, as long as the VM
+			// had recent guest-agent evidence from prior successful polls.
 			// Skip when we know the agent is explicitly disabled — that's a
 			// permanent state and stale data shouldn't persist indefinitely.
 			if res.Status == "running" && res.Type == "qemu" && !diskFromAgent && shouldCarryForwardQEMUDisk(diskStatusReason) {

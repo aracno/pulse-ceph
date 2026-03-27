@@ -149,6 +149,43 @@ func (c *transientStatusFailureClusterClient) GetVMStatus(ctx context.Context, n
 	return nil, context.DeadlineExceeded
 }
 
+func (c *transientStatusFailureClusterClient) GetVMFSInfo(ctx context.Context, node string, vmid int) ([]proxmox.VMFileSystem, error) {
+	return []proxmox.VMFileSystem{{
+		Mountpoint: "/",
+		Type:       "ext4",
+		TotalBytes: 100 * 1024 * 1024 * 1024,
+		UsedBytes:  40 * 1024 * 1024 * 1024,
+		Disk:       "/dev/vda",
+	}}, nil
+}
+
+func (c *transientStatusFailureClusterClient) GetVMNetworkInterfaces(ctx context.Context, node string, vmid int) ([]proxmox.VMNetworkInterface, error) {
+	return []proxmox.VMNetworkInterface{
+		{
+			Name:         "Ethernet0",
+			HardwareAddr: "00:11:22:33:44:55",
+			IPAddresses: []proxmox.VMIpAddress{
+				{Address: "192.168.1.50", Prefix: 24},
+			},
+		},
+	}, nil
+}
+
+func (c *transientStatusFailureClusterClient) GetVMAgentInfo(ctx context.Context, node string, vmid int) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"pretty-name": "Ubuntu 24.04",
+		"version":     "24.04",
+	}, nil
+}
+
+func (c *transientStatusFailureClusterClient) GetVMAgentVersion(ctx context.Context, node string, vmid int) (string, error) {
+	return "8.2.0", nil
+}
+
+func (c *transientStatusFailureClusterClient) GetVMMemAvailableFromAgent(ctx context.Context, node string, vmid int) (uint64, error) {
+	return 5 * 1024, nil
+}
+
 func (c *healthyGuestLowTrustMemoryClusterClient) GetClusterResources(ctx context.Context, resourceType string) ([]proxmox.ClusterResource, error) {
 	return c.resources, nil
 }
@@ -417,6 +454,78 @@ func TestPollVMsAndContainersEfficientPreservesCachedGuestMetadataWhenStatusUnav
 	}
 	if vm.AgentVersion != "8.2.0" {
 		t.Fatalf("expected cached agent version to be preserved, got %q", vm.AgentVersion)
+	}
+}
+
+func TestPollVMsAndContainersEfficientContinuesGuestAgentQueriesAfterTransientStatusFailure(t *testing.T) {
+	t.Setenv("PULSE_DATA_DIR", t.TempDir())
+
+	client := &transientStatusFailureClusterClient{
+		resources: []proxmox.ClusterResource{
+			{Type: "qemu", Node: "node1", VMID: 100, Name: "vm100", Status: "running", MaxMem: 8 * 1024, Mem: 8 * 1024, MaxDisk: 100 * 1024 * 1024 * 1024, MaxCPU: 4},
+		},
+	}
+
+	mon := newTestPVEMonitor("pve1")
+	defer mon.alertManager.Stop()
+	defer mon.notificationMgr.Stop()
+
+	mon.rateTracker = NewRateTracker()
+	mon.guestMetadataCache = make(map[string]guestMetadataCacheEntry)
+	mon.guestMetadataLimiter = make(map[string]time.Time)
+	mon.vmRRDMemCache = make(map[string]rrdMemCacheEntry)
+	mon.vmAgentMemCache = make(map[string]agentMemCacheEntry)
+	mon.guestAgentFSInfoTimeout = 250 * time.Millisecond
+	mon.guestAgentNetworkTimeout = 250 * time.Millisecond
+	mon.guestAgentOSInfoTimeout = 250 * time.Millisecond
+	mon.guestAgentVersionTimeout = 250 * time.Millisecond
+	mon.guestAgentRetries = 0
+	mon.guestAgentWorkSlots = make(chan struct{}, 1)
+
+	mon.state.UpdateVMsForInstance("pve1", []models.VM{
+		{
+			ID:           makeGuestID("pve1", "node1", 100),
+			VMID:         100,
+			Name:         "vm100",
+			Node:         "node1",
+			Instance:     "pve1",
+			Type:         "qemu",
+			Status:       "running",
+			AgentVersion: "8.1.0",
+			NetworkInterfaces: []models.GuestNetworkInterface{
+				{Name: "Ethernet0", MAC: "00:11:22:33:44:55", Addresses: []string{"192.168.1.50"}},
+			},
+			LastSeen: time.Now(),
+		},
+	})
+
+	if ok := mon.pollVMsAndContainersEfficient(context.Background(), "pve1", "", false, client, map[string]string{"node1": "online"}); !ok {
+		t.Fatal("pollVMsAndContainersEfficient() returned false")
+	}
+
+	state := mon.state.GetSnapshot()
+	if len(state.VMs) != 1 {
+		t.Fatalf("expected 1 VM, got %d", len(state.VMs))
+	}
+
+	vm := state.VMs[0]
+	if vm.MemorySource != "guest-agent-meminfo" {
+		t.Fatalf("expected guest-agent memory fallback after status failure, got %q", vm.MemorySource)
+	}
+	if vm.Disk.Usage != 40 {
+		t.Fatalf("expected live guest-agent disk usage after status failure, got %.2f", vm.Disk.Usage)
+	}
+	if vm.DiskStatusReason != "" {
+		t.Fatalf("expected empty disk status reason, got %q", vm.DiskStatusReason)
+	}
+	if len(vm.Disks) != 1 || vm.Disks[0].Device != "/dev/vda" {
+		t.Fatalf("expected live guest-agent disk inventory, got %#v", vm.Disks)
+	}
+	if len(vm.NetworkInterfaces) != 1 || vm.NetworkInterfaces[0].Name != "Ethernet0" {
+		t.Fatalf("expected refreshed network interfaces, got %#v", vm.NetworkInterfaces)
+	}
+	if vm.AgentVersion != "8.2.0" {
+		t.Fatalf("expected refreshed agent version, got %q", vm.AgentVersion)
 	}
 }
 

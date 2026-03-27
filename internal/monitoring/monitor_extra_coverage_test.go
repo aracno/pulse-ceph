@@ -685,6 +685,89 @@ func TestPollVMsWithNodes_PreservesCachedGuestMetadataWhenStatusUnavailable(t *t
 	}
 }
 
+func TestPollVMsWithNodes_ContinuesGuestAgentQueriesAfterTransientStatusFailure(t *testing.T) {
+	m := &Monitor{
+		state:                    models.NewState(),
+		guestAgentFSInfoTimeout:  time.Second,
+		guestAgentRetries:        1,
+		guestAgentNetworkTimeout: time.Second,
+		guestAgentOSInfoTimeout:  time.Second,
+		guestAgentVersionTimeout: time.Second,
+		guestMetadataCache:       make(map[string]guestMetadataCacheEntry),
+		guestMetadataLimiter:     make(map[string]time.Time),
+		rateTracker:              NewRateTracker(),
+		metricsHistory:           NewMetricsHistory(100, time.Hour),
+		alertManager:             alerts.NewManager(),
+		stalenessTracker:         NewStalenessTracker(nil),
+		nodeRRDMemCache:          make(map[string]rrdMemCacheEntry),
+		vmRRDMemCache:            make(map[string]rrdMemCacheEntry),
+		vmAgentMemCache:          make(map[string]agentMemCacheEntry),
+	}
+	defer m.alertManager.Stop()
+
+	m.state.UpdateVMsForInstance("pve1", []models.VM{
+		{
+			ID:           makeGuestID("pve1", "node1", 100),
+			VMID:         100,
+			Name:         "vm100",
+			Node:         "node1",
+			Instance:     "pve1",
+			Type:         "qemu",
+			Status:       "running",
+			AgentVersion: "8.1.0",
+			NetworkInterfaces: []models.GuestNetworkInterface{
+				{Name: "eth0", MAC: "00:11:22:33:44:55", Addresses: []string{"192.168.1.50"}},
+			},
+			LastSeen: time.Now(),
+		},
+	})
+
+	client := &mockPVEClientExtra{
+		vms: []proxmox.VM{
+			{VMID: 100, Name: "vm100", Node: "node1", Status: "running", MaxMem: 8 * 1024, Mem: 4 * 1024, MaxDisk: 100 * 1024 * 1024 * 1024},
+		},
+		vmStatusErr: fmt.Errorf("API error 500: timeout"),
+		fsInfo: []proxmox.VMFileSystem{
+			{Mountpoint: "/", Type: "ext4", TotalBytes: 100 * 1024 * 1024 * 1024, UsedBytes: 40 * 1024 * 1024 * 1024, Disk: "/dev/vda"},
+		},
+		netIfaces: []proxmox.VMNetworkInterface{
+			{Name: "eth0", HardwareAddr: "00:11:22:33:44:55", IPAddresses: []proxmox.VMIpAddress{{Address: "192.168.1.50", Prefix: 24}}},
+		},
+	}
+
+	m.pollVMsWithNodes(
+		context.Background(),
+		"pve1",
+		"",
+		false,
+		client,
+		[]proxmox.Node{{Node: "node1", Status: "online"}},
+		map[string]string{"node1": "online"},
+	)
+
+	state := m.GetState()
+	if len(state.VMs) != 1 {
+		t.Fatalf("expected 1 VM, got %d", len(state.VMs))
+	}
+
+	vm := state.VMs[0]
+	if vm.Disk.Usage != 40 {
+		t.Fatalf("expected guest-agent disk usage after status failure, got %.2f", vm.Disk.Usage)
+	}
+	if vm.DiskStatusReason != "" {
+		t.Fatalf("expected empty disk status reason, got %q", vm.DiskStatusReason)
+	}
+	if len(vm.Disks) != 1 || vm.Disks[0].Device != "/dev/vda" {
+		t.Fatalf("expected guest-agent disk inventory, got %#v", vm.Disks)
+	}
+	if len(vm.NetworkInterfaces) != 1 || vm.NetworkInterfaces[0].Name != "eth0" {
+		t.Fatalf("expected guest-agent interfaces after status failure, got %#v", vm.NetworkInterfaces)
+	}
+	if vm.AgentVersion != "1.0" {
+		t.Fatalf("expected refreshed agent version, got %q", vm.AgentVersion)
+	}
+}
+
 func TestMonitor_PollGuestSnapshots_Extra(t *testing.T) {
 	m := &Monitor{
 		state:          models.NewState(),

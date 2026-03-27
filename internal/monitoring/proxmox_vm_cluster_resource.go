@@ -104,6 +104,11 @@ func (m *Monitor) pollEfficientQEMUResource(
 	var ipAddresses []string
 	var networkInterfaces []models.GuestNetworkInterface
 	var osName, osVersion, agentVersion string
+	var prevVM *models.VM
+	if prev, ok := prevVMByGuestID[guestID]; ok {
+		prevVM = &prev
+	}
+	guestAgentAvailable := false
 
 	memTotal := res.MaxMem
 	memUsed := res.Mem
@@ -117,7 +122,6 @@ func (m *Monitor) pollEfficientQEMUResource(
 	memRawFree := uint64(0)
 	memInfoTotalMinusUsed := uint64(0)
 	rrdUsed := uint64(0)
-	agentEnabled := false
 
 	diskUsed := res.Disk
 	diskTotal := res.MaxDisk
@@ -151,7 +155,6 @@ func (m *Monitor) pollEfficientQEMUResource(
 			guestRaw.Balloon = detailedStatus.Balloon
 			guestRaw.BalloonMin = detailedStatus.BalloonMin
 			guestRaw.Agent = detailedStatus.Agent.Value
-			agentEnabled = detailedStatus.Agent.Value > 0
 			if detailedStatus.MemInfo != nil {
 				guestRaw.MemInfoUsed = detailedStatus.MemInfo.Used
 				guestRaw.MemInfoFree = detailedStatus.MemInfo.Free
@@ -193,8 +196,9 @@ func (m *Monitor) pollEfficientQEMUResource(
 			}
 		}
 	}
+	guestAgentAvailable = res.Status == "running" && shouldQueryGuestAgent(detailedStatus, prevVM, time.Now())
 
-	if res.Status == "running" && agentEnabled && memAvailable == 0 {
+	if guestAgentAvailable && memAvailable == 0 {
 		m.runGuestAgentVMWork(ctx, instanceName, res.Node, res.Name, res.VMID, func(agentCtx context.Context) {
 			if agentAvail, agentErr := m.getVMAgentMemAvailable(agentCtx, client, instanceName, res.Node, res.VMID); agentErr == nil && agentAvail > 0 {
 				memAvailable = agentAvail
@@ -248,7 +252,7 @@ func (m *Monitor) pollEfficientQEMUResource(
 		}
 	}
 
-	if res.Status == "running" && agentEnabled && detailedStatus != nil && detailedStatus.Agent.Value > 0 {
+	if guestAgentAvailable {
 		m.runGuestAgentFSInfoWork(ctx, instanceName, res.Node, res.Name, res.VMID, func(agentCtx context.Context) {
 			fsInfoRaw, err := m.retryGuestAgentCall(agentCtx, m.guestAgentFSInfoTimeout, m.guestAgentRetries, func(ctx context.Context) (interface{}, error) {
 				return client.GetVMFSInfo(ctx, res.Node, res.VMID)
@@ -372,7 +376,7 @@ func (m *Monitor) pollEfficientQEMUResource(
 
 	if res.Status == "running" {
 		m.runGuestAgentVMWork(ctx, instanceName, res.Node, res.Name, res.VMID, func(agentCtx context.Context) {
-			guestIPs, guestIfaces, guestOSName, guestOSVersion, guestAgentVersion := m.fetchGuestAgentMetadata(agentCtx, client, instanceName, res.Node, res.Name, res.VMID, detailedStatus)
+			guestIPs, guestIfaces, guestOSName, guestOSVersion, guestAgentVersion := m.fetchGuestAgentMetadata(agentCtx, client, instanceName, res.Node, res.Name, res.VMID, detailedStatus, guestAgentAvailable)
 			if len(guestIPs) > 0 {
 				ipAddresses = guestIPs
 			}
