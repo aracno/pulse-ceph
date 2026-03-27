@@ -7974,25 +7974,46 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 			sampleTime := time.Now()
 			var memory models.Memory
 			snapshotNotes := []string(nil)
-			if prev, ok := prevVMByGuestID[guestID]; ok &&
-				shouldCarryForwardPreviousVMMemory(prev, res.Status, memorySource, memTotal, memUsed, sampleTime) {
-				fallbackSource := memorySource
-				memory = prev.Memory
-				if detailedStatus != nil && detailedStatus.Balloon > 0 {
-					memory.Balloon = int64(detailedStatus.Balloon)
+			guestAgentHealthy := diskFromAgent || len(ipAddresses) > 0 || len(networkInterfaces) > 0 || osName != "" || osVersion != "" || agentVersion != ""
+			if prev, ok := prevVMByGuestID[guestID]; ok {
+				switch {
+				case shouldCarryForwardHealthyGuestLowTrustVMMemory(prev, res.Status, memorySource, memTotal, memUsed, sampleTime, guestAgentHealthy):
+					fallbackSource := memorySource
+					memory = prev.Memory
+					if detailedStatus != nil && detailedStatus.Balloon > 0 {
+						memory.Balloon = int64(detailedStatus.Balloon)
+					}
+					memorySource = "previous-snapshot"
+					snapshotNotes = append(snapshotNotes, "preserved-previous-memory-for-healthy-guest-low-trust-full-usage")
+					log.Debug().
+						Str("instance", instanceName).
+						Str("vm", res.Name).
+						Int("vmid", res.VMID).
+						Str("previousSource", prev.MemorySource).
+						Str("fallbackSource", fallbackSource).
+						Float64("previousUsage", prev.Memory.Usage).
+						Float64("fallbackUsage", safePercentage(float64(memUsed), float64(memTotal))).
+						Msg("Preserving previous VM memory metrics for guest with healthy agent signals after low-trust full-usage fallback")
+				case shouldCarryForwardPreviousVMMemory(prev, res.Status, memorySource, memTotal, memUsed, sampleTime):
+					fallbackSource := memorySource
+					memory = prev.Memory
+					if detailedStatus != nil && detailedStatus.Balloon > 0 {
+						memory.Balloon = int64(detailedStatus.Balloon)
+					}
+					memorySource = "previous-snapshot"
+					snapshotNotes = append(snapshotNotes, "preserved-previous-memory-after-low-trust-fallback")
+					log.Debug().
+						Str("instance", instanceName).
+						Str("vm", res.Name).
+						Int("vmid", res.VMID).
+						Str("previousSource", prev.MemorySource).
+						Str("fallbackSource", fallbackSource).
+						Float64("previousUsage", prev.Memory.Usage).
+						Float64("fallbackUsage", safePercentage(float64(memUsed), float64(memTotal))).
+						Msg("Preserving previous VM memory metrics after low-trust fallback")
 				}
-				memorySource = "previous-snapshot"
-				snapshotNotes = append(snapshotNotes, "preserved-previous-memory-after-low-trust-fallback")
-				log.Debug().
-					Str("instance", instanceName).
-					Str("vm", res.Name).
-					Int("vmid", res.VMID).
-					Str("previousSource", prev.MemorySource).
-					Str("fallbackSource", fallbackSource).
-					Float64("previousUsage", prev.Memory.Usage).
-					Float64("fallbackUsage", safePercentage(float64(memUsed), float64(memTotal))).
-					Msg("Preserving previous VM memory metrics after low-trust fallback")
-			} else {
+			}
+			if memory.Total == 0 {
 				memFree := uint64(0)
 				if memTotal >= memUsed {
 					memFree = memTotal - memUsed

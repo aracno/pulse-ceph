@@ -10,6 +10,7 @@ import (
 
 const (
 	vmMemoryCarryForwardMaxAge        = 2 * time.Minute
+	vmMemoryHealthyGuestMaxAge        = 10 * time.Minute
 	vmMemoryCarryForwardMinUsageDelta = 5.0
 	vmMemorySourceReliabilityLow      = 0
 	vmMemorySourceReliabilityFallback = 1
@@ -56,6 +57,39 @@ func shouldCarryForwardPreviousVMMemory(prev models.VM, currentStatus, currentSo
 
 	currentUsage := safePercentage(float64(currentUsed), float64(currentTotal))
 	if prev.Memory.Usage > 0 && math.Abs(prev.Memory.Usage-currentUsage) < vmMemoryCarryForwardMinUsageDelta {
+		return false
+	}
+
+	return true
+}
+
+func shouldCarryForwardHealthyGuestLowTrustVMMemory(prev models.VM, currentStatus, currentSource string, currentTotal, currentUsed uint64, now time.Time, guestAgentHealthy bool) bool {
+	if !guestAgentHealthy || currentStatus != "running" || prev.Type != "qemu" || prev.Status != "running" {
+		return false
+	}
+	if prev.Memory.Total <= 0 || prev.Memory.Used < 0 {
+		return false
+	}
+	if prev.LastSeen.IsZero() || now.Sub(prev.LastSeen) > vmMemoryHealthyGuestMaxAge {
+		return false
+	}
+	if currentTotal == 0 || prev.Memory.Total != int64(currentTotal) {
+		return false
+	}
+	if vmMemorySourceReliability(currentSource) != vmMemorySourceReliabilityLow {
+		return false
+	}
+
+	currentUsage := safePercentage(float64(currentUsed), float64(currentTotal))
+	if currentUsage < 99 {
+		return false
+	}
+	if prev.Memory.Usage >= 90 || math.Abs(prev.Memory.Usage-currentUsage) < vmMemoryCarryForwardMinUsageDelta {
+		return false
+	}
+
+	prevReliability := vmMemorySourceReliability(prev.MemorySource)
+	if prev.MemorySource != "previous-snapshot" && prevReliability < vmMemorySourceReliabilityTrusted {
 		return false
 	}
 

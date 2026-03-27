@@ -37,6 +37,11 @@ type transientStatusFailureClusterClient struct {
 	resources []proxmox.ClusterResource
 }
 
+type healthyGuestLowTrustMemoryClusterClient struct {
+	stubPVEClient
+	resources []proxmox.ClusterResource
+}
+
 func (c *slowGuestAgentClusterClient) GetClusterResources(ctx context.Context, resourceType string) ([]proxmox.ClusterResource, error) {
 	return c.resources, nil
 }
@@ -137,6 +142,50 @@ func (c *transientStatusFailureClusterClient) GetClusterResources(ctx context.Co
 
 func (c *transientStatusFailureClusterClient) GetVMStatus(ctx context.Context, node string, vmid int) (*proxmox.VMStatus, error) {
 	return nil, context.DeadlineExceeded
+}
+
+func (c *healthyGuestLowTrustMemoryClusterClient) GetClusterResources(ctx context.Context, resourceType string) ([]proxmox.ClusterResource, error) {
+	return c.resources, nil
+}
+
+func (c *healthyGuestLowTrustMemoryClusterClient) GetVMStatus(ctx context.Context, node string, vmid int) (*proxmox.VMStatus, error) {
+	const total = uint64(8 << 30)
+	return &proxmox.VMStatus{
+		Status: "running",
+		Agent:  proxmox.VMAgentField{Value: 1},
+		MaxMem: total,
+		Mem:    total,
+	}, nil
+}
+
+func (c *healthyGuestLowTrustMemoryClusterClient) GetVMNetworkInterfaces(ctx context.Context, node string, vmid int) ([]proxmox.VMNetworkInterface, error) {
+	return []proxmox.VMNetworkInterface{
+		{
+			Name:         "Ethernet0",
+			HardwareAddr: "00:11:22:33:44:55",
+			IPAddresses: []proxmox.VMIpAddress{
+				{Address: "192.168.1.50", Prefix: 24},
+			},
+		},
+	}, nil
+}
+
+func (c *healthyGuestLowTrustMemoryClusterClient) GetVMAgentInfo(ctx context.Context, node string, vmid int) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"name":           "Ubuntu",
+		"version-id":     "24.04",
+		"pretty-name":    "Ubuntu 24.04",
+		"version":        "24.04",
+		"kernel-release": "6.8.0",
+	}, nil
+}
+
+func (c *healthyGuestLowTrustMemoryClusterClient) GetVMAgentVersion(ctx context.Context, node string, vmid int) (string, error) {
+	return "8.2.0", nil
+}
+
+func (c *healthyGuestLowTrustMemoryClusterClient) GetVMMemAvailableFromAgent(ctx context.Context, node string, vmid int) (uint64, error) {
+	return 0, context.DeadlineExceeded
 }
 
 func TestGuestAgentFSInfoBudgetHonorsConfiguredTimeouts(t *testing.T) {
@@ -331,6 +380,77 @@ func TestPollVMsAndContainersEfficientPreservesCachedGuestMetadataWhenStatusUnav
 	}
 	if vm.AgentVersion != "8.2.0" {
 		t.Fatalf("expected cached agent version to be preserved, got %q", vm.AgentVersion)
+	}
+}
+
+func TestPollVMsAndContainersEfficientKeepsPreviousMemoryForHealthyGuestAfterRepeatedLowTrustFullUsage(t *testing.T) {
+	t.Setenv("PULSE_DATA_DIR", t.TempDir())
+
+	const total = uint64(8 << 30)
+	const trustedUsed = uint64(3 << 30)
+
+	client := &healthyGuestLowTrustMemoryClusterClient{
+		resources: []proxmox.ClusterResource{
+			{Type: "qemu", Node: "node1", VMID: 100, Name: "vm100", Status: "running", MaxMem: total, Mem: total, MaxDisk: 100 * 1024 * 1024 * 1024, MaxCPU: 4},
+		},
+	}
+
+	mon := newTestPVEMonitor("pve1")
+	defer mon.alertManager.Stop()
+	defer mon.notificationMgr.Stop()
+
+	mon.rateTracker = NewRateTracker()
+	mon.guestMetadataCache = make(map[string]guestMetadataCacheEntry)
+	mon.guestMetadataLimiter = make(map[string]time.Time)
+	mon.vmRRDMemCache = make(map[string]rrdMemCacheEntry)
+	mon.vmAgentMemCache = make(map[string]agentMemCacheEntry)
+	mon.guestAgentFSInfoTimeout = 250 * time.Millisecond
+	mon.guestAgentNetworkTimeout = 250 * time.Millisecond
+	mon.guestAgentOSInfoTimeout = 250 * time.Millisecond
+	mon.guestAgentVersionTimeout = 250 * time.Millisecond
+	mon.guestAgentRetries = 0
+	mon.guestAgentWorkSlots = make(chan struct{}, 1)
+
+	mon.state.UpdateVMsForInstance("pve1", []models.VM{
+		{
+			ID:           makeGuestID("pve1", "node1", 100),
+			VMID:         100,
+			Name:         "vm100",
+			Node:         "node1",
+			Instance:     "pve1",
+			Type:         "qemu",
+			Status:       "running",
+			MemorySource: "guest-agent-meminfo",
+			Memory: models.Memory{
+				Total: int64(total),
+				Used:  int64(trustedUsed),
+				Free:  int64(total - trustedUsed),
+				Usage: safePercentage(float64(trustedUsed), float64(total)),
+			},
+			LastSeen: time.Now(),
+		},
+	})
+
+	for i := 0; i < 2; i++ {
+		if ok := mon.pollVMsAndContainersEfficient(context.Background(), "pve1", "", false, client, map[string]string{"node1": "online"}); !ok {
+			t.Fatalf("pollVMsAndContainersEfficient() returned false on pass %d", i+1)
+		}
+	}
+
+	state := mon.state.GetSnapshot()
+	if len(state.VMs) != 1 {
+		t.Fatalf("expected 1 VM, got %d", len(state.VMs))
+	}
+
+	vm := state.VMs[0]
+	if vm.MemorySource != "previous-snapshot" {
+		t.Fatalf("memory source = %q, want previous-snapshot", vm.MemorySource)
+	}
+	if vm.Memory.Used != int64(trustedUsed) {
+		t.Fatalf("memory used = %d, want preserved %d", vm.Memory.Used, trustedUsed)
+	}
+	if len(vm.NetworkInterfaces) != 1 || vm.NetworkInterfaces[0].Name != "Ethernet0" {
+		t.Fatalf("expected guest agent network metadata to confirm healthy guest, got %#v", vm.NetworkInterfaces)
 	}
 }
 

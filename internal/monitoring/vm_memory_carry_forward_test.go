@@ -155,6 +155,42 @@ func TestShouldCarryForwardPreviousVMMemory_WhenTrustedGuestAgentMeminfoDropsToM
 	}
 }
 
+func TestShouldCarryForwardHealthyGuestLowTrustVMMemory(t *testing.T) {
+	now := time.Now()
+	const total = uint64(16 << 30)
+
+	makePrevVM := func(source string, used uint64, lastSeen time.Time) models.VM {
+		return models.VM{
+			Type:         "qemu",
+			Status:       "running",
+			MemorySource: source,
+			Memory: models.Memory{
+				Total: int64(total),
+				Used:  int64(used),
+				Free:  int64(total - used),
+				Usage: safePercentage(float64(used), float64(total)),
+			},
+			LastSeen: lastSeen,
+		}
+	}
+
+	if !shouldCarryForwardHealthyGuestLowTrustVMMemory(makePrevVM("guest-agent-meminfo", 4<<30, now), "running", "status-mem", total, total, now, true) {
+		t.Fatal("expected healthy guest with low-trust 100% usage to preserve previous trusted reading")
+	}
+	if !shouldCarryForwardHealthyGuestLowTrustVMMemory(makePrevVM("previous-snapshot", 4<<30, now), "running", "status-mem", total, total, now, true) {
+		t.Fatal("expected chained previous-snapshot reading to be preserved while guest agent signals stay healthy")
+	}
+	if shouldCarryForwardHealthyGuestLowTrustVMMemory(makePrevVM("guest-agent-meminfo", 4<<30, now), "running", "status-mem", total, total, now, false) {
+		t.Fatal("expected healthy guest signal to be required")
+	}
+	if shouldCarryForwardHealthyGuestLowTrustVMMemory(makePrevVM("guest-agent-meminfo", 15<<30, now), "running", "status-mem", total, total, now, true) {
+		t.Fatal("expected previous near-full usage to avoid preservation")
+	}
+	if shouldCarryForwardHealthyGuestLowTrustVMMemory(makePrevVM("guest-agent-meminfo", 4<<30, now), "running", "rrd-memused", total, total, now, true) {
+		t.Fatal("expected trusted current memory sources not to be overridden")
+	}
+}
+
 func TestShouldCarryForwardPreviousVMMemory(t *testing.T) {
 	now := time.Now()
 	const total = uint64(16 << 30)
