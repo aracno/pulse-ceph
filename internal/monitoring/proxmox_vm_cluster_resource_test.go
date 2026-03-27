@@ -726,6 +726,75 @@ func TestPollVMsAndContainersEfficientMarksDiskUnknownUntilGuestAgentFilesystemD
 	}
 }
 
+func TestPollVMsAndContainersEfficientUsesLinkedHostAgentDiskFallback(t *testing.T) {
+	t.Setenv("PULSE_DATA_DIR", t.TempDir())
+
+	client := &emptyFSInfoClusterClient{
+		resources: []proxmox.ClusterResource{
+			{
+				Type:    "qemu",
+				Node:    "node1",
+				VMID:    100,
+				Name:    "vm100",
+				Status:  "running",
+				MaxMem:  8 * 1024,
+				Mem:     4 * 1024,
+				MaxDisk: 100 * 1024 * 1024 * 1024,
+				MaxCPU:  4,
+			},
+		},
+	}
+
+	mon := newTestPVEMonitor("pve1")
+	defer mon.alertManager.Stop()
+	defer mon.notificationMgr.Stop()
+
+	mon.rateTracker = NewRateTracker()
+	mon.guestMetadataCache = make(map[string]guestMetadataCacheEntry)
+	mon.guestMetadataLimiter = make(map[string]time.Time)
+	mon.vmRRDMemCache = make(map[string]rrdMemCacheEntry)
+	mon.vmAgentMemCache = make(map[string]agentMemCacheEntry)
+	mon.guestAgentWorkSlots = make(chan struct{}, 2)
+
+	mon.state.UpsertHost(models.Host{
+		ID:         "host-100",
+		Hostname:   "vm100-agent",
+		Status:     "online",
+		LinkedVMID: makeGuestID("pve1", "node1", 100),
+		Disks: []models.Disk{
+			{
+				Total:      100 * 1024 * 1024 * 1024,
+				Used:       57 * 1024 * 1024 * 1024,
+				Free:       43 * 1024 * 1024 * 1024,
+				Usage:      57,
+				Mountpoint: "C:",
+				Type:       "NTFS",
+				Device:     "C:",
+			},
+		},
+	})
+
+	if ok := mon.pollVMsAndContainersEfficient(context.Background(), "pve1", "", false, client, map[string]string{"node1": "online"}); !ok {
+		t.Fatal("pollVMsAndContainersEfficient() returned false")
+	}
+
+	state := mon.state.GetSnapshot()
+	if len(state.VMs) != 1 {
+		t.Fatalf("expected 1 VM, got %d", len(state.VMs))
+	}
+
+	vm := state.VMs[0]
+	if vm.Disk.Usage != 57 {
+		t.Fatalf("expected linked host-agent disk usage, got %.2f", vm.Disk.Usage)
+	}
+	if vm.DiskStatusReason != "" {
+		t.Fatalf("expected cleared disk status reason, got %q", vm.DiskStatusReason)
+	}
+	if len(vm.Disks) != 1 || vm.Disks[0].Mountpoint != "C:" {
+		t.Fatalf("expected linked host-agent disk inventory, got %#v", vm.Disks)
+	}
+}
+
 func TestPollVMsAndContainersEfficientKeepsNormalizedWindowsDriveRoots(t *testing.T) {
 	t.Setenv("PULSE_DATA_DIR", t.TempDir())
 

@@ -241,7 +241,7 @@ func (m *Monitor) pollEfficientQEMUResource(
 	}
 
 	if res.Status == "running" && memAvailable == 0 {
-		if agentHost, ok := vmIDToHostAgent[guestID]; ok {
+		if agentHost, ok := vmIDToHostAgent[guestID]; ok && agentHost.Memory.Total > 0 {
 			agentAvailable := agentHost.Memory.Total - agentHost.Memory.Used
 			if agentAvailable > 0 {
 				memAvailable = uint64(agentAvailable)
@@ -393,6 +393,24 @@ func (m *Monitor) pollEfficientQEMUResource(
 				agentVersion = guestAgentVersion
 			}
 		})
+	}
+
+	if res.Status == "running" && !diskFromAgent {
+		if hostDisk, hostDisks, ok := resolveGuestDiskFromLinkedHostAgent(guestID, vmIDToHostAgent); ok && hostDisk.Total > 0 {
+			diskTotal = uint64(hostDisk.Total)
+			diskUsed = uint64(hostDisk.Used)
+			diskFree = uint64(hostDisk.Free)
+			diskUsage = hostDisk.Usage
+			individualDisks = hostDisks
+			diskFromAgent = true
+			diskStatusReason = ""
+			log.Debug().
+				Str("instance", instanceName).
+				Str("vm", res.Name).
+				Int("vmid", res.VMID).
+				Float64("usage", hostDisk.Usage).
+				Msg("QEMU disk: using linked Pulse host agent disk summary")
+		}
 	}
 
 	if res.Status == "running" && !diskFromAgent && shouldCarryForwardQEMUDisk(diskStatusReason) {

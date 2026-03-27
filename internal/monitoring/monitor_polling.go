@@ -297,12 +297,7 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 			prevDiskByGuestID[pvm.ID] = pvm.Disk
 		}
 	}
-	vmIDToHostAgent := make(map[string]models.Host)
-	for _, h := range prevState.Hosts {
-		if h.LinkedVMID != "" && h.Status == "online" && h.Memory.Total > 0 {
-			vmIDToHostAgent[h.LinkedVMID] = h
-		}
-	}
+	vmIDToHostAgent := buildLinkedVMHostAgentMap(prevState.Hosts)
 
 	// Launch a goroutine for each online node
 	for _, node := range nodes {
@@ -490,7 +485,7 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 				}
 
 				if vm.Status == "running" && memAvailable == 0 {
-					if agentHost, ok := vmIDToHostAgent[guestID]; ok {
+					if agentHost, ok := vmIDToHostAgent[guestID]; ok && agentHost.Memory.Total > 0 {
 						agentAvailable := agentHost.Memory.Total - agentHost.Memory.Used
 						if agentAvailable > 0 {
 							memAvailable = uint64(agentAvailable)
@@ -541,56 +536,6 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 					memUsed = memTotal
 				}
 
-				if vm.Status == "running" {
-					m.runGuestAgentVMWork(ctx, instanceName, n.Node, vm.Name, vm.VMID, func(agentCtx context.Context) {
-						guestIPs, guestIfaces, guestOSName, guestOSVersion, agentVersion := m.fetchGuestAgentMetadata(agentCtx, client, instanceName, n.Node, vm.Name, vm.VMID, vmStatus, guestAgentAvailable)
-						if len(guestIPs) > 0 {
-							ipAddresses = guestIPs
-						}
-						if len(guestIfaces) > 0 {
-							networkInterfaces = guestIfaces
-						}
-						if guestOSName != "" {
-							osName = guestOSName
-						}
-						if guestOSVersion != "" {
-							osVersion = guestOSVersion
-						}
-						if agentVersion != "" {
-							guestAgentVersion = agentVersion
-						}
-					})
-				}
-
-				// Calculate I/O rates after we have the actual values
-				sampleTime := time.Now()
-				currentMetrics := IOMetrics{
-					DiskRead:   diskReadBytes,
-					DiskWrite:  diskWriteBytes,
-					NetworkIn:  networkInBytes,
-					NetworkOut: networkOutBytes,
-					Timestamp:  sampleTime,
-				}
-				diskReadRate, diskWriteRate, netInRate, netOutRate := m.rateTracker.CalculateRates(guestID, currentMetrics)
-
-				// Debug log disk I/O rates
-				if diskReadRate > 0 || diskWriteRate > 0 {
-					log.Debug().
-						Str("vm", vm.Name).
-						Int("vmid", vm.VMID).
-						Float64("diskReadRate", diskReadRate).
-						Float64("diskWriteRate", diskWriteRate).
-						Int64("diskReadBytes", diskReadBytes).
-						Int64("diskWriteBytes", diskWriteBytes).
-						Msg("VM disk I/O rates calculated")
-				}
-
-				// Set CPU to 0 for non-running VMs
-				cpuUsage := safeFloat(vm.CPU)
-				if vm.Status != "running" {
-					cpuUsage = 0
-				}
-
 				// Calculate disk usage - start with allocated disk size
 				// NOTE: The Proxmox cluster/resources API always returns 0 for VM disk usage
 				// We must query the guest agent to get actual disk usage
@@ -598,6 +543,7 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 				diskTotal := vm.MaxDisk
 				diskFree := diskTotal - diskUsed
 				diskUsage := safePercentage(float64(diskUsed), float64(diskTotal))
+				diskFromAgent := false
 				diskStatusReason := ""
 				var individualDisks []models.Disk
 
@@ -825,6 +771,7 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 									diskUsed = usedBytes
 									diskFree = totalBytes - usedBytes
 									diskUsage = safePercentage(float64(usedBytes), float64(totalBytes))
+									diskFromAgent = true
 									diskStatusReason = "" // Clear reason on success
 
 									log.Info().
@@ -860,14 +807,52 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 					}
 				}
 
+				if vm.Status == "running" {
+					m.runGuestAgentVMWork(ctx, instanceName, n.Node, vm.Name, vm.VMID, func(agentCtx context.Context) {
+						guestIPs, guestIfaces, guestOSName, guestOSVersion, agentVersion := m.fetchGuestAgentMetadata(agentCtx, client, instanceName, n.Node, vm.Name, vm.VMID, vmStatus, guestAgentAvailable)
+						if len(guestIPs) > 0 {
+							ipAddresses = guestIPs
+						}
+						if len(guestIfaces) > 0 {
+							networkInterfaces = guestIfaces
+						}
+						if guestOSName != "" {
+							osName = guestOSName
+						}
+						if guestOSVersion != "" {
+							osVersion = guestOSVersion
+						}
+						if agentVersion != "" {
+							guestAgentVersion = agentVersion
+						}
+					})
+				}
+
+				if vm.Status == "running" && !diskFromAgent {
+					if hostDisk, hostDisks, ok := resolveGuestDiskFromLinkedHostAgent(guestID, vmIDToHostAgent); ok && hostDisk.Total > 0 {
+						diskTotal = uint64(hostDisk.Total)
+						diskUsed = uint64(hostDisk.Used)
+						diskFree = uint64(hostDisk.Free)
+						diskUsage = hostDisk.Usage
+						individualDisks = hostDisks
+						diskFromAgent = true
+						diskStatusReason = ""
+						log.Debug().
+							Str("vm", vm.Name).
+							Str("node", n.Node).
+							Int("vmid", vm.VMID).
+							Float64("usage", hostDisk.Usage).
+							Msg("QEMU disk: using linked Pulse host agent disk summary")
+					}
+				}
+
 				// Carry forward previous disk data when the guest agent failed this cycle.
 				// Proxmox cluster/resources always returns 0 for disk usage, so without
 				// the guest agent we'd show 0% or "allocated only", causing chart spikes
 				// when the agent intermittently times out. Refs: #1319
 				// Only carry forward for transient failures — not when the agent is
 				// permanently disabled or absent, as those won't self-resolve.
-				if vm.Status == "running" && diskUsage <= 0 && diskStatusReason != "" &&
-					diskStatusReason != "vm-stopped" && diskStatusReason != "agent-disabled" && diskStatusReason != "no-agent" {
+				if vm.Status == "running" && !diskFromAgent && shouldCarryForwardQEMUDisk(diskStatusReason) {
 					if prev, ok := prevDiskByGuestID[guestID]; ok && prev.Usage > 0 && prev.Total > 0 && prev.Used >= 0 && prev.Used <= prev.Total {
 						diskTotal = uint64(prev.Total)
 						diskUsed = uint64(prev.Used)
@@ -887,6 +872,35 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 						}
 						diskStatusReason = "prev-" + diskStatusReason
 					}
+				}
+
+				// Calculate I/O rates after we have the actual values
+				sampleTime := time.Now()
+				currentMetrics := IOMetrics{
+					DiskRead:   diskReadBytes,
+					DiskWrite:  diskWriteBytes,
+					NetworkIn:  networkInBytes,
+					NetworkOut: networkOutBytes,
+					Timestamp:  sampleTime,
+				}
+				diskReadRate, diskWriteRate, netInRate, netOutRate := m.rateTracker.CalculateRates(guestID, currentMetrics)
+
+				// Debug log disk I/O rates
+				if diskReadRate > 0 || diskWriteRate > 0 {
+					log.Debug().
+						Str("vm", vm.Name).
+						Int("vmid", vm.VMID).
+						Float64("diskReadRate", diskReadRate).
+						Float64("diskWriteRate", diskWriteRate).
+						Int64("diskReadBytes", diskReadBytes).
+						Int64("diskWriteBytes", diskWriteBytes).
+						Msg("VM disk I/O rates calculated")
+				}
+
+				// Set CPU to 0 for non-running VMs
+				cpuUsage := safeFloat(vm.CPU)
+				if vm.Status != "running" {
+					cpuUsage = 0
 				}
 
 				memTotalBytes := clampToInt64(memTotal)

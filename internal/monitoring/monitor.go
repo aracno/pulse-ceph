@@ -7367,12 +7367,7 @@ func (m *Monitor) pollVMsAndContainersEfficient(ctx context.Context, instanceNam
 	// When a Pulse agent runs inside a VM, it reads /proc/meminfo directly
 	// and gets accurate MemAvailable (excluding page cache). We use this as
 	// a memory fallback before the inflated status.Mem value. Refs: #1270
-	vmIDToHostAgent := make(map[string]models.Host)
-	for _, h := range prevState.Hosts {
-		if h.LinkedVMID != "" && h.Status == "online" && h.Memory.Total > 0 {
-			vmIDToHostAgent[h.LinkedVMID] = h
-		}
-	}
+	vmIDToHostAgent := buildLinkedVMHostAgentMap(prevState.Hosts)
 
 	// Build a lookup for previous disk data so we can carry it forward when the
 	// guest agent call fails (prevents disk usage flickering 57% → 0% → 57%).
