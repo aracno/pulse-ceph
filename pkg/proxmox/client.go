@@ -1460,8 +1460,8 @@ func (fs *VMFileSystem) UnmarshalJSON(data []byte) error {
 	fs.Name = raw.Name
 	fs.Type = raw.Type
 	fs.Mountpoint = raw.Mountpoint
-	if fs.Mountpoint == "" {
-		if normalized, ok := normalizeWindowsDriveMountpoint(raw.Name); ok {
+	if normalized, ok := normalizeWindowsDriveMountpoint(raw.Name); ok {
+		if fs.Mountpoint == "" || isWindowsVolumeGUIDMountpoint(fs.Mountpoint) {
 			fs.Mountpoint = normalized
 		}
 	}
@@ -1488,6 +1488,11 @@ func normalizeWindowsDriveMountpoint(value string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func isWindowsVolumeGUIDMountpoint(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	return strings.HasPrefix(value, `\\?\volume{`) && strings.HasSuffix(value, `}\`)
 }
 
 func parseUint64Flexible(value interface{}) (uint64, error) {
