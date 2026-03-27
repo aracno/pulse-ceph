@@ -1010,6 +1010,71 @@ func TestPollVMsWithNodes_RotatesGuestAgentPriorityAcrossPolls(t *testing.T) {
 	}
 }
 
+func TestPollVMsWithNodes_CompletesDiskQueriesWithinPollBudget(t *testing.T) {
+	t.Setenv("PULSE_DATA_DIR", t.TempDir())
+
+	m := &Monitor{
+		state:                    models.NewState(),
+		guestAgentFSInfoTimeout:  250 * time.Millisecond,
+		guestAgentRetries:        0,
+		guestAgentNetworkTimeout: 250 * time.Millisecond,
+		guestAgentOSInfoTimeout:  250 * time.Millisecond,
+		guestAgentVersionTimeout: 250 * time.Millisecond,
+		guestMetadataCache:       make(map[string]guestMetadataCacheEntry),
+		guestMetadataLimiter:     make(map[string]time.Time),
+		rateTracker:              NewRateTracker(),
+		metricsHistory:           NewMetricsHistory(100, time.Hour),
+		alertManager:             alerts.NewManager(),
+		stalenessTracker:         NewStalenessTracker(nil),
+		nodeRRDMemCache:          make(map[string]rrdMemCacheEntry),
+		vmRRDMemCache:            make(map[string]rrdMemCacheEntry),
+		vmAgentMemCache:          make(map[string]agentMemCacheEntry),
+		guestAgentWorkSlots:      make(chan struct{}, 3),
+		guestAgentPollCursor:     make(map[string]int),
+	}
+	defer m.alertManager.Stop()
+
+	client := &rotatingLegacyGuestAgentClient{
+		mockPVEClientExtra: mockPVEClientExtra{
+			vms: []proxmox.VM{
+				{VMID: 100, Name: "vm100", Node: "node1", Status: "running", MaxMem: 8 * 1024, Mem: 4 * 1024, MaxDisk: 100 * 1024 * 1024 * 1024},
+				{VMID: 101, Name: "vm101", Node: "node1", Status: "running", MaxMem: 8 * 1024, Mem: 4 * 1024, MaxDisk: 100 * 1024 * 1024 * 1024},
+				{VMID: 102, Name: "vm102", Node: "node1", Status: "running", MaxMem: 8 * 1024, Mem: 4 * 1024, MaxDisk: 100 * 1024 * 1024 * 1024},
+			},
+			vmStatus: &proxmox.VMStatus{
+				Status: "running",
+				Agent:  proxmox.VMAgentField{Value: 1},
+				MaxMem: 8 * 1024,
+				Mem:    4 * 1024,
+			},
+		},
+		fsDelay: 60 * time.Millisecond,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 95*time.Millisecond)
+	defer cancel()
+
+	m.pollVMsWithNodes(
+		ctx,
+		"pve1",
+		"",
+		false,
+		client,
+		[]proxmox.Node{{Node: "node1", Status: "online"}},
+		map[string]string{"node1": "online"},
+	)
+
+	state := m.GetState()
+	if len(state.VMs) != 3 {
+		t.Fatalf("expected 3 VMs, got %d", len(state.VMs))
+	}
+	for _, vm := range state.VMs {
+		if vm.Disk.Usage <= 0 {
+			t.Fatalf("expected guest-agent disk data for %s within poll budget, got usage=%.2f reason=%q", vm.Name, vm.Disk.Usage, vm.DiskStatusReason)
+		}
+	}
+}
+
 func TestMonitor_PollGuestSnapshots_Extra(t *testing.T) {
 	m := &Monitor{
 		state:          models.NewState(),

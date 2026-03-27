@@ -371,12 +371,7 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 				indexedVMs,
 				m.nextGuestAgentPollOffset(instanceName+":"+n.Node, len(indexedVMs)),
 			)
-			nodeResults := make([]orderedNodeVMResult, 0, len(scheduledVMs))
-
-			// Process each VM while rotating guest-agent priority across polls.
-			// This keeps the same higher-VMID guests from always falling to the
-			// back of the queue under timeouts or bounded guest-agent work slots.
-			for _, indexedVM := range scheduledVMs {
+			pollVM := func(indexedVM indexedLegacyVM) orderedNodeVMResult {
 				vm := indexedVM.vm
 
 				// Parse tags
@@ -1023,7 +1018,7 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 					m.guestMetadataStore.GetWithLegacyMigration(guestID, instanceName, n.Node, vm.VMID)
 				}
 
-				nodeResults = append(nodeResults, orderedNodeVMResult{
+				return orderedNodeVMResult{
 					order:   indexedVM.order,
 					vm:      modelVM,
 					alertVM: modelVM,
@@ -1035,7 +1030,44 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 						Memory:       modelVM.Memory,
 						Raw:          guestRaw,
 					},
-				})
+				}
+			}
+
+			// Process each VM while rotating guest-agent priority across polls and
+			// allowing per-VM work to run in parallel. Without this, the legacy
+			// per-node path serializes every guest-agent timeout behind the first
+			// affected VM, which is exactly the "higher VMIDs starve first" pattern
+			// reported in clustered environments.
+			nodeResults := make([]orderedNodeVMResult, 0, len(scheduledVMs))
+			if len(scheduledVMs) > 0 {
+				resultCh := make(chan orderedNodeVMResult, len(scheduledVMs))
+				jobCh := make(chan indexedLegacyVM, len(scheduledVMs))
+				var vmWG sync.WaitGroup
+
+				workerCount := m.efficientQEMUWorkerCount(len(scheduledVMs))
+				for i := 0; i < workerCount; i++ {
+					vmWG.Add(1)
+					go func() {
+						defer vmWG.Done()
+						for entry := range jobCh {
+							resultCh <- pollVM(entry)
+						}
+					}()
+				}
+
+				for _, entry := range scheduledVMs {
+					jobCh <- entry
+				}
+				close(jobCh)
+
+				go func() {
+					vmWG.Wait()
+					close(resultCh)
+				}()
+
+				for result := range resultCh {
+					nodeResults = append(nodeResults, result)
+				}
 			}
 
 			sort.Slice(nodeResults, func(i, j int) bool {
