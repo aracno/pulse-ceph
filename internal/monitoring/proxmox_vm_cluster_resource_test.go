@@ -42,6 +42,11 @@ type healthyGuestLowTrustMemoryClusterClient struct {
 	resources []proxmox.ClusterResource
 }
 
+type windowsDriveClusterClient struct {
+	stubPVEClient
+	resources []proxmox.ClusterResource
+}
+
 func (c *slowGuestAgentClusterClient) GetClusterResources(ctx context.Context, resourceType string) ([]proxmox.ClusterResource, error) {
 	return c.resources, nil
 }
@@ -186,6 +191,38 @@ func (c *healthyGuestLowTrustMemoryClusterClient) GetVMAgentVersion(ctx context.
 
 func (c *healthyGuestLowTrustMemoryClusterClient) GetVMMemAvailableFromAgent(ctx context.Context, node string, vmid int) (uint64, error) {
 	return 0, context.DeadlineExceeded
+}
+
+func (c *windowsDriveClusterClient) GetClusterResources(ctx context.Context, resourceType string) ([]proxmox.ClusterResource, error) {
+	return c.resources, nil
+}
+
+func (c *windowsDriveClusterClient) GetVMStatus(ctx context.Context, node string, vmid int) (*proxmox.VMStatus, error) {
+	return &proxmox.VMStatus{
+		Status: "running",
+		MaxMem: 8 * 1024,
+		Mem:    4 * 1024,
+		Agent:  proxmox.VMAgentField{Value: 1},
+	}, nil
+}
+
+func (c *windowsDriveClusterClient) GetVMFSInfo(ctx context.Context, node string, vmid int) ([]proxmox.VMFileSystem, error) {
+	return []proxmox.VMFileSystem{
+		{
+			Mountpoint: "C:",
+			Type:       "NTFS",
+			TotalBytes: 100 * 1024 * 1024 * 1024,
+			UsedBytes:  57 * 1024 * 1024 * 1024,
+			Disk:       "C:",
+		},
+		{
+			Mountpoint: "System Reserved",
+			Type:       "NTFS",
+			TotalBytes: 500 * 1024 * 1024,
+			UsedBytes:  150 * 1024 * 1024,
+			Disk:       "system-reserved",
+		},
+	}, nil
 }
 
 func TestGuestAgentFSInfoBudgetHonorsConfiguredTimeouts(t *testing.T) {
@@ -577,6 +614,61 @@ func TestPollVMsAndContainersEfficientMarksDiskUnknownUntilGuestAgentFilesystemD
 	guestMetrics := mon.metricsHistory.GetGuestMetrics(vm.ID, "disk", time.Hour)
 	if len(guestMetrics) != 0 {
 		t.Fatalf("expected no disk metric samples while disk usage is unknown, got %#v", guestMetrics)
+	}
+}
+
+func TestPollVMsAndContainersEfficientKeepsNormalizedWindowsDriveRoots(t *testing.T) {
+	t.Setenv("PULSE_DATA_DIR", t.TempDir())
+
+	client := &windowsDriveClusterClient{
+		resources: []proxmox.ClusterResource{
+			{
+				Type:    "qemu",
+				Node:    "node1",
+				VMID:    100,
+				Name:    "win100",
+				Status:  "running",
+				MaxMem:  8 * 1024,
+				Mem:     4 * 1024,
+				Disk:    0,
+				MaxDisk: 100 * 1024 * 1024 * 1024,
+				MaxCPU:  4,
+			},
+		},
+	}
+
+	mon := newTestPVEMonitor("pve1")
+	defer mon.alertManager.Stop()
+	defer mon.notificationMgr.Stop()
+
+	mon.rateTracker = NewRateTracker()
+	mon.guestMetadataCache = make(map[string]guestMetadataCacheEntry)
+	mon.guestMetadataLimiter = make(map[string]time.Time)
+	mon.vmRRDMemCache = make(map[string]rrdMemCacheEntry)
+	mon.vmAgentMemCache = make(map[string]agentMemCacheEntry)
+	mon.guestAgentWorkSlots = make(chan struct{}, 2)
+
+	if ok := mon.pollVMsAndContainersEfficient(context.Background(), "pve1", "", false, client, map[string]string{"node1": "online"}); !ok {
+		t.Fatal("pollVMsAndContainersEfficient() returned false")
+	}
+
+	state := mon.state.GetSnapshot()
+	if len(state.VMs) != 1 {
+		t.Fatalf("expected 1 VM, got %d", len(state.VMs))
+	}
+
+	vm := state.VMs[0]
+	if vm.DiskStatusReason != "" {
+		t.Fatalf("expected empty disk status reason, got %q", vm.DiskStatusReason)
+	}
+	if len(vm.Disks) != 1 {
+		t.Fatalf("expected 1 usable Windows disk, got %#v", vm.Disks)
+	}
+	if vm.Disks[0].Mountpoint != "C:" {
+		t.Fatalf("expected normalized Windows drive root to be preserved, got %q", vm.Disks[0].Mountpoint)
+	}
+	if vm.Disk.Usage <= 0 {
+		t.Fatalf("expected Windows guest disk usage to be populated, got %.2f", vm.Disk.Usage)
 	}
 }
 

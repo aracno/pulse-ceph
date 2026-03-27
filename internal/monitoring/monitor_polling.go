@@ -733,9 +733,9 @@ func (m *Monitor) pollVMsWithNodes(ctx context.Context, instanceName string, clu
 										Uint64("used", fs.UsedBytes).
 										Msg("Processing filesystem from guest agent")
 
-									// Skip special filesystems and Windows System Reserved
-									// For Windows, mountpoints are like "C:\\" or "D:\\" - don't skip those
-									isWindowsDrive := len(fs.Mountpoint) >= 2 && fs.Mountpoint[1] == ':' && strings.Contains(fs.Mountpoint, "\\")
+									// Skip special filesystems and Windows System Reserved.
+									// Treat normalized drive roots like "C:" the same as "C:\\".
+									isWindowsDrive := isWindowsGuestFilesystemMountpoint(fs.Mountpoint)
 
 									if !isWindowsDrive {
 										if reason, skip := readOnlyFilesystemReason(fs.Type, fs.TotalBytes, fs.UsedBytes); skip {
