@@ -2,6 +2,8 @@ package monitoring
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"testing"
 	"time"
 
@@ -204,7 +206,7 @@ func TestBuildClusterClientEndpoints_PrefersOverrideWhenEndpointFingerprintPrese
 		},
 	}
 
-	endpoints, fingerprints := buildClusterClientEndpoints(pve)
+	endpoints, fingerprints := buildClusterClientEndpoints(pve, config.DiscoveryConfig{})
 
 	if len(endpoints) != 2 {
 		t.Fatalf("expected endpoint plus main host fallback, got %d", len(endpoints))
@@ -321,7 +323,7 @@ func TestBuildClusterClientEndpoints_FallsBackToMainHostWhenOnlyBaseFingerprintE
 		},
 	}
 
-	endpoints, fingerprints := buildClusterClientEndpoints(pve)
+	endpoints, fingerprints := buildClusterClientEndpoints(pve, config.DiscoveryConfig{})
 
 	if len(endpoints) != 1 {
 		t.Fatalf("expected only the main host fallback endpoint, got %d", len(endpoints))
@@ -331,5 +333,100 @@ func TestBuildClusterClientEndpoints_FallsBackToMainHostWhenOnlyBaseFingerprintE
 	}
 	if len(fingerprints) != 0 {
 		t.Fatalf("expected no per-endpoint fingerprints, got %v", fingerprints)
+	}
+}
+
+func TestBuildClusterClientEndpoints_SkipsEndpointsOutsideDiscoverySubnetPolicy(t *testing.T) {
+	pve := config.PVEInstance{
+		Name:        "cluster-a",
+		Host:        "https://10.15.2.10:8006",
+		VerifySSL:   false,
+		IsCluster:   true,
+		ClusterName: "cluster-a",
+		ClusterEndpoints: []config.ClusterEndpoint{
+			{
+				NodeName: "node1",
+				IP:       "10.15.5.11",
+			},
+			{
+				NodeName: "node2",
+				IP:       "10.15.2.12",
+			},
+		},
+	}
+
+	discoveryCfg := config.DiscoveryConfig{
+		SubnetAllowlist: []string{"10.15.2.0/24"},
+		SubnetBlocklist: []string{"10.15.5.0/24"},
+	}
+
+	endpoints, fingerprints := buildClusterClientEndpoints(pve, discoveryCfg)
+
+	if len(endpoints) != 2 {
+		t.Fatalf("expected allowed endpoint plus main host fallback, got %d", len(endpoints))
+	}
+	if endpoints[0] != "https://10.15.2.12:8006" {
+		t.Fatalf("expected allowed management endpoint first, got %q", endpoints[0])
+	}
+	if endpoints[1] != "https://10.15.2.10:8006" {
+		t.Fatalf("expected main host fallback, got %q", endpoints[1])
+	}
+	if len(fingerprints) != 0 {
+		t.Fatalf("expected no fingerprints, got %v", fingerprints)
+	}
+}
+
+func TestBuildClusterClientEndpoints_SkipsHostnameResolvingOutsideDiscoverySubnetPolicy(t *testing.T) {
+	originalLookupIP := lookupIPFunc
+	lookupIPFunc = func(host string) ([]net.IP, error) {
+		switch host {
+		case "node1.local":
+			return []net.IP{net.ParseIP("10.15.5.11")}, nil
+		case "node2.local":
+			return []net.IP{net.ParseIP("10.15.2.12")}, nil
+		default:
+			return nil, fmt.Errorf("unexpected host %q", host)
+		}
+	}
+	defer func() {
+		lookupIPFunc = originalLookupIP
+	}()
+
+	pve := config.PVEInstance{
+		Name:        "cluster-a",
+		Host:        "https://10.15.2.10:8006",
+		Fingerprint: "cluster-base-fp",
+		VerifySSL:   true,
+		IsCluster:   true,
+		ClusterName: "cluster-a",
+		ClusterEndpoints: []config.ClusterEndpoint{
+			{
+				NodeName: "node1",
+				Host:     "https://node1.local:8006",
+				IP:       "10.15.5.11",
+			},
+			{
+				NodeName: "node2",
+				Host:     "https://node2.local:8006",
+				IP:       "10.15.2.12",
+			},
+		},
+	}
+
+	discoveryCfg := config.DiscoveryConfig{
+		SubnetAllowlist: []string{"10.15.2.0/24"},
+		SubnetBlocklist: []string{"10.15.5.0/24"},
+	}
+
+	endpoints, _ := buildClusterClientEndpoints(pve, discoveryCfg)
+
+	if len(endpoints) != 2 {
+		t.Fatalf("expected allowed hostname endpoint plus main host fallback, got %d", len(endpoints))
+	}
+	if endpoints[0] != "https://node2.local:8006" {
+		t.Fatalf("expected allowed hostname endpoint first, got %q", endpoints[0])
+	}
+	if endpoints[1] != "https://10.15.2.10:8006" {
+		t.Fatalf("expected main host fallback, got %q", endpoints[1])
 	}
 }

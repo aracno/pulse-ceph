@@ -55,6 +55,8 @@ var newProxmoxClientFunc = func(cfg proxmox.ClientConfig) (PVEClientInterface, e
 	return proxmox.NewClient(cfg)
 }
 
+var lookupIPFunc = net.LookupIP
+
 // PVEClientInterface defines the interface for PVE clients (both regular and cluster)
 type PVEClientInterface interface {
 	GetNodes(ctx context.Context) ([]proxmox.Node, error)
@@ -723,7 +725,121 @@ func clusterEndpointEffectiveURL(endpoint config.ClusterEndpoint, verifySSL bool
 	return ""
 }
 
-func buildClusterClientEndpoints(pve config.PVEInstance) ([]string, map[string]string) {
+func discoveryPolicyCIDRs(cidrs []string) []*net.IPNet {
+	networks := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		networks = append(networks, network)
+	}
+	return networks
+}
+
+func discoveryPolicyBlockedIPs(ips []string) map[string]struct{} {
+	blocked := make(map[string]struct{}, len(ips))
+	for _, raw := range ips {
+		ip := net.ParseIP(strings.TrimSpace(raw))
+		if ip == nil {
+			continue
+		}
+		blocked[ip.String()] = struct{}{}
+	}
+	return blocked
+}
+
+func discoveryPolicyAllowsIP(ip net.IP, allowlist, blocklist []*net.IPNet, blockedIPs map[string]struct{}) bool {
+	if ip == nil {
+		return false
+	}
+
+	if _, blocked := blockedIPs[ip.String()]; blocked {
+		return false
+	}
+
+	for _, network := range blocklist {
+		if network.Contains(ip) {
+			return false
+		}
+	}
+
+	if len(allowlist) == 0 {
+		return true
+	}
+
+	for _, network := range allowlist {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func discoveryPolicyIPsForEndpointHost(candidateURL string) []net.IP {
+	if candidateURL == "" {
+		return nil
+	}
+
+	host := normalizeEndpointHost(candidateURL)
+	if host == "" {
+		return nil
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		return []net.IP{ip}
+	}
+
+	ips, err := lookupIPFunc(host)
+	if err != nil {
+		return nil
+	}
+
+	filtered := make([]net.IP, 0, len(ips))
+	for _, ip := range ips {
+		if ip == nil {
+			continue
+		}
+		filtered = append(filtered, ip)
+	}
+	return filtered
+}
+
+func clusterEndpointAllowedByDiscoveryPolicy(endpoint config.ClusterEndpoint, candidateURL string, discoveryCfg config.DiscoveryConfig) bool {
+	if len(discoveryCfg.SubnetAllowlist) == 0 && len(discoveryCfg.SubnetBlocklist) == 0 && len(discoveryCfg.IPBlocklist) == 0 {
+		return true
+	}
+
+	allowlist := discoveryPolicyCIDRs(discoveryCfg.SubnetAllowlist)
+	blocklist := discoveryPolicyCIDRs(discoveryCfg.SubnetBlocklist)
+	blockedIPs := discoveryPolicyBlockedIPs(discoveryCfg.IPBlocklist)
+
+	resolvedIPs := discoveryPolicyIPsForEndpointHost(candidateURL)
+	if len(resolvedIPs) == 0 {
+		if ip := net.ParseIP(strings.TrimSpace(endpoint.EffectiveIP())); ip != nil {
+			resolvedIPs = []net.IP{ip}
+		}
+	}
+
+	if len(resolvedIPs) == 0 {
+		return true
+	}
+
+	for _, ip := range resolvedIPs {
+		if !discoveryPolicyAllowsIP(ip, allowlist, blocklist, blockedIPs) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func buildClusterClientEndpoints(pve config.PVEInstance, discoveryCfg config.DiscoveryConfig) ([]string, map[string]string) {
 	endpoints := make([]string, 0, len(pve.ClusterEndpoints)+1)
 	endpointFingerprints := make(map[string]string)
 	hasValidEndpoints := false
@@ -734,6 +850,15 @@ func buildClusterClientEndpoints(pve config.PVEInstance) ([]string, map[string]s
 			log.Warn().
 				Str("node", ep.NodeName).
 				Msg("Skipping cluster endpoint with no host/IP")
+			continue
+		}
+
+		if !clusterEndpointAllowedByDiscoveryPolicy(ep, effectiveURL, discoveryCfg) {
+			log.Info().
+				Str("instance", pve.Name).
+				Str("node", ep.NodeName).
+				Str("endpoint", effectiveURL).
+				Msg("Skipping cluster endpoint outside discovery subnet policy")
 			continue
 		}
 
@@ -4661,7 +4786,7 @@ func New(cfg *config.Config) (*Monitor, error) {
 
 				// Check if this is a cluster
 			if pve.IsCluster && len(pve.ClusterEndpoints) > 0 {
-				endpoints, endpointFingerprints := buildClusterClientEndpoints(pve)
+				endpoints, endpointFingerprints := buildClusterClientEndpoints(pve, m.config.Discovery)
 
 				log.Info().
 					Str("cluster", pve.ClusterName).
@@ -5383,7 +5508,7 @@ func (m *Monitor) retryFailedConnections(ctx context.Context) {
 		// Try to recreate PVE clients
 		for _, pve := range missingPVE {
 			if pve.IsCluster && len(pve.ClusterEndpoints) > 0 {
-				endpoints, endpointFingerprints := buildClusterClientEndpoints(pve)
+				endpoints, endpointFingerprints := buildClusterClientEndpoints(pve, m.config.Discovery)
 
 				clientConfig := config.CreateProxmoxConfig(&pve)
 				clientConfig.Timeout = m.config.ConnectionTimeout
