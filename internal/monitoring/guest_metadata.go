@@ -592,7 +592,16 @@ func processGuestNetworkInterfaces(raw []proxmox.VMNetworkInterface) ([]string, 
 		txBytes := parseInterfaceStat(iface.Statistics, "tx-bytes")
 
 		if len(addresses) == 0 && rxBytes == 0 && txBytes == 0 {
-			continue
+			if len(iface.IPAddresses) > 0 {
+				continue
+			}
+			lowerName := strings.ToLower(ifaceName)
+			if ifaceName == "" || lowerName == "lo" || lowerName == "loopback" {
+				continue
+			}
+			if mac == "" || mac == "00:00:00:00:00:00" {
+				continue
+			}
 		}
 
 		guestIfaces = append(guestIfaces, models.GuestNetworkInterface{

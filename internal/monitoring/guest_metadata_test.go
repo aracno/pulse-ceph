@@ -508,11 +508,26 @@ func TestProcessGuestNetworkInterfaces(t *testing.T) {
 			},
 		},
 		{
-			name: "interface with no IPs and no traffic is excluded",
+			name: "interface with no IPs and no traffic keeps non-loopback identity",
 			raw: []proxmox.VMNetworkInterface{
 				{
 					Name:         "eth0",
 					HardwareAddr: "00:11:22:33:44:55",
+					IPAddresses:  nil,
+					Statistics:   nil,
+				},
+			},
+			wantIPs: []string{},
+			wantIfaces: []models.GuestNetworkInterface{
+				{Name: "eth0", MAC: "00:11:22:33:44:55", Addresses: nil},
+			},
+		},
+		{
+			name: "loopback-only interface with no IPs and no traffic is excluded",
+			raw: []proxmox.VMNetworkInterface{
+				{
+					Name:         "lo",
+					HardwareAddr: "00:00:00:00:00:00",
 					IPAddresses:  nil,
 					Statistics:   nil,
 				},
