@@ -56,8 +56,14 @@ func guestMetadataCacheHasUsefulData(entry guestMetadataCacheEntry) bool {
 		entry.agentVersion != ""
 }
 
+func guestMetadataCacheHasNetworkData(entry guestMetadataCacheEntry) bool {
+	return len(entry.ipAddresses) > 0 || len(entry.networkInterfaces) > 0
+}
+
 func guestMetadataCacheEntryTTL(entry guestMetadataCacheEntry) time.Duration {
-	if guestMetadataCacheHasUsefulData(entry) {
+	// Treat identity-only metadata as incomplete so VMs that answered
+	// guest-info/version but not network-interfaces are retried soon.
+	if guestMetadataCacheHasNetworkData(entry) {
 		return guestMetadataCacheTTL
 	}
 	return guestMetadataEmptyTTL
@@ -109,7 +115,7 @@ func (m *Monitor) scheduleGuestMetadataFetchForEntry(key string, now time.Time, 
 	if m == nil {
 		return
 	}
-	if !guestMetadataCacheHasUsefulData(entry) {
+	if !guestMetadataCacheHasNetworkData(entry) {
 		m.guestMetadataLimiterMu.Lock()
 		m.guestMetadataLimiter[key] = now.Add(guestMetadataEmptyTTL)
 		m.guestMetadataLimiterMu.Unlock()
