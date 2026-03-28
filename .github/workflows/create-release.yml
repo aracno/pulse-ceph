@@ -517,6 +517,9 @@ jobs:
     needs:
       - prepare
       - create_release
+    permissions:
+      contents: write
+      issues: write
     uses: ./.github/workflows/validate-release-assets.yml
     secrets: inherit
     with:
