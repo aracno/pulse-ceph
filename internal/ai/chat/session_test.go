@@ -1,8 +1,10 @@
 package chat
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,4 +118,63 @@ func TestGenerateTitle(t *testing.T) {
 	for _, tt := range tests {
 		assert.Equal(t, tt.expected, generateTitle(tt.input))
 	}
+}
+
+func TestSessionStore_HashedPathsAndLegacyCompatibility(t *testing.T) {
+	store, err := NewSessionStore(t.TempDir())
+	require.NoError(t, err)
+
+	session := sessionData{
+		ID:        "legacy-session",
+		Title:     "Legacy Title",
+		Messages:  []Message{{Role: "user", Content: "hello"}},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	path := store.sessionPath(session.ID)
+	assert.Equal(t, filepath.Join(store.dataDir, hashedSessionStorageName(session.ID)+".json"), path)
+	assert.NotContains(t, filepath.Base(path), "..")
+
+	legacyPath := store.legacySessionPath(session.ID)
+	raw, err := json.Marshal(session)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(legacyPath, raw, 0600))
+
+	got, err := store.Get(session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, session.ID, got.ID)
+	assert.Equal(t, session.Title, got.Title)
+
+	sessions, err := store.List()
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, session.ID, sessions[0].ID)
+}
+
+func TestSessionStore_PathTraversalIDsStayWithinStore(t *testing.T) {
+	store, err := NewSessionStore(t.TempDir())
+	require.NoError(t, err)
+
+	err = store.writeSession(sessionData{
+		ID:        "..",
+		Title:     "Traversal",
+		Messages:  []Message{},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+	require.NoError(t, err)
+
+	path := store.sessionPath("..")
+	rel, err := filepath.Rel(store.dataDir, path)
+	require.NoError(t, err)
+	assert.False(t, strings.HasPrefix(rel, ".."))
+
+	got, err := store.Get("..")
+	require.NoError(t, err)
+	assert.Equal(t, "..", got.ID)
+
+	require.NoError(t, store.Delete(".."))
+	_, err = store.Get("..")
+	assert.Error(t, err)
 }

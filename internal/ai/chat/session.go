@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -66,7 +68,28 @@ func NewSessionStore(dataDir string) (*SessionStore, error) {
 
 // sessionPath returns the file path for a session
 func (s *SessionStore) sessionPath(id string) string {
+	return filepath.Join(s.dataDir, hashedSessionStorageName(id)+".json")
+}
+
+func (s *SessionStore) legacySessionPath(id string) string {
 	return filepath.Join(s.dataDir, id+".json")
+}
+
+func hashedSessionStorageName(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])
+}
+
+func resolveSessionPath(primaryPath, legacyPath string) string {
+	if _, err := os.Stat(primaryPath); err == nil {
+		return primaryPath
+	}
+	if legacyPath != "" {
+		if _, err := os.Stat(legacyPath); err == nil {
+			return legacyPath
+		}
+	}
+	return primaryPath
 }
 
 // List returns all sessions, sorted by updated_at descending
@@ -85,9 +108,14 @@ func (s *SessionStore) List() ([]Session, error) {
 			continue
 		}
 
-		data, err := s.readSession(strings.TrimSuffix(entry.Name(), ".json"))
+		file, err := os.ReadFile(filepath.Join(s.dataDir, entry.Name()))
 		if err != nil {
 			log.Warn().Err(err).Str("file", entry.Name()).Msg("Failed to read session file")
+			continue
+		}
+		var data sessionData
+		if err := json.Unmarshal(file, &data); err != nil {
+			log.Warn().Err(err).Str("file", entry.Name()).Msg("Failed to parse session file")
 			continue
 		}
 
@@ -158,12 +186,20 @@ func (s *SessionStore) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	path := s.sessionPath(id)
-	if err := os.Remove(path); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("session not found: %s", id)
+	primaryPath := s.sessionPath(id)
+	legacyPath := s.legacySessionPath(id)
+	var removed bool
+	for _, path := range []string{primaryPath, legacyPath} {
+		if err := os.Remove(path); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("failed to delete session: %w", err)
 		}
-		return fmt.Errorf("failed to delete session: %w", err)
+		removed = true
+	}
+	if !removed {
+		return fmt.Errorf("session not found: %s", id)
 	}
 
 	// Also clean up resolved context, FSM, and knowledge accumulator
@@ -239,7 +275,7 @@ func (s *SessionStore) UpdateLastMessage(id string, msg Message) error {
 
 // readSession reads a session from disk (caller must hold lock)
 func (s *SessionStore) readSession(id string) (*sessionData, error) {
-	path := s.sessionPath(id)
+	path := resolveSessionPath(s.sessionPath(id), s.legacySessionPath(id))
 	file, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -266,6 +302,10 @@ func (s *SessionStore) writeSession(data sessionData) error {
 	path := s.sessionPath(data.ID)
 	if err := os.WriteFile(path, file, 0600); err != nil {
 		return fmt.Errorf("failed to write session: %w", err)
+	}
+	legacyPath := s.legacySessionPath(data.ID)
+	if legacyPath != path {
+		_ = os.Remove(legacyPath)
 	}
 
 	return nil
