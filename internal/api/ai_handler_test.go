@@ -307,7 +307,7 @@ func TestRestart_StartsStoppedServiceWithSavedStateProvider(t *testing.T) {
 	assert.Equal(t, "data", capturedCfg.DataDir)
 }
 
-func TestStart_AllowsEmptyPersistenceDataDir(t *testing.T) {
+func TestStart_DefaultsEmptyPersistenceDataDir(t *testing.T) {
 	oldNewService := newChatService
 	defer func() { newChatService = oldNewService }()
 
@@ -327,7 +327,7 @@ func TestStart_AllowsEmptyPersistenceDataDir(t *testing.T) {
 
 	err := h.Start(context.Background(), mockState)
 	assert.NoError(t, err)
-	assert.Equal(t, "", capturedCfg.DataDir)
+	assert.Equal(t, "data", capturedCfg.DataDir)
 	assert.Same(t, mockState, capturedCfg.StateProvider)
 }
 

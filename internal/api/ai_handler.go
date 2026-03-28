@@ -311,6 +311,10 @@ type AIStateProvider interface {
 func (h *AIHandler) Start(ctx context.Context, stateProvider AIStateProvider) error {
 	log.Info().Msg("AIHandler.Start called")
 	aiCfg := h.loadAIConfig(ctx)
+	return h.startWithConfig(ctx, stateProvider, aiCfg)
+}
+
+func (h *AIHandler) startWithConfig(ctx context.Context, stateProvider AIStateProvider, aiCfg *config.AIConfig) error {
 	if aiCfg == nil {
 		log.Info().Msg("AI config is nil, AI is disabled")
 		return nil
@@ -396,7 +400,7 @@ func (h *AIHandler) Restart(ctx context.Context) error {
 			}
 			h.stateProvidersMu.RUnlock()
 
-			return h.Start(ctx, sp)
+			return h.startWithConfig(ctx, sp, newCfg)
 		}
 		return nil
 	}
