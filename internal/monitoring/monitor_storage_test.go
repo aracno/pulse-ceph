@@ -355,6 +355,87 @@ func TestPollStorageWithNodesOptimizedAttachesZFSPoolFromDatasetPath(t *testing.
 	}
 }
 
+func TestPollStorageWithNodesOptimizedSynthesizesSharedClusterOnlyStorage(t *testing.T) {
+	t.Setenv("PULSE_DATA_DIR", t.TempDir())
+
+	monitor := &Monitor{
+		state: &models.State{},
+	}
+
+	localStorage := proxmox.Storage{
+		Storage:   "local",
+		Type:      "dir",
+		Content:   "images",
+		Active:    1,
+		Enabled:   1,
+		Total:     1000,
+		Used:      250,
+		Available: 750,
+	}
+
+	cephStorage := proxmox.Storage{
+		Storage: "ceph-shared",
+		Type:    "rbd",
+		Content: "images,rootdir",
+		Nodes:   "pve1,pve2",
+		Pool:    "ceph-pool",
+	}
+
+	client := &fakeStorageClient{
+		allStorage: []proxmox.Storage{localStorage, cephStorage},
+		storageByNode: map[string][]proxmox.Storage{
+			"pve1": {localStorage},
+			"pve2": {},
+		},
+	}
+
+	nodes := []proxmox.Node{
+		{Node: "pve1", Status: "online"},
+		{Node: "pve2", Status: "online"},
+	}
+
+	monitor.pollStorageWithNodes(context.Background(), "inst1", client, nodes)
+
+	if len(monitor.state.Storage) != 2 {
+		t.Fatalf("expected 2 storage entries, got %d", len(monitor.state.Storage))
+	}
+
+	var shared *models.Storage
+	for i := range monitor.state.Storage {
+		if monitor.state.Storage[i].ID == "inst1-cluster-ceph-shared" {
+			shared = &monitor.state.Storage[i]
+			break
+		}
+	}
+	if shared == nil {
+		t.Fatal("expected synthesized shared Ceph storage entry")
+	}
+	if !shared.Shared {
+		t.Fatal("expected synthesized storage to be marked shared")
+	}
+	if shared.Node != "cluster" {
+		t.Fatalf("shared storage node = %q, want cluster", shared.Node)
+	}
+	if shared.Instance != "inst1" {
+		t.Fatalf("shared storage instance = %q, want inst1", shared.Instance)
+	}
+	if shared.Type != "rbd" {
+		t.Fatalf("shared storage type = %q, want rbd", shared.Type)
+	}
+	if shared.Pool != "ceph-pool" {
+		t.Fatalf("shared storage pool = %q, want ceph-pool", shared.Pool)
+	}
+	if shared.NodeCount != 2 {
+		t.Fatalf("shared storage node count = %d, want 2", shared.NodeCount)
+	}
+	if len(shared.Nodes) != 2 || shared.Nodes[0] != "pve1" || shared.Nodes[1] != "pve2" {
+		t.Fatalf("shared storage nodes = %#v, want [pve1 pve2]", shared.Nodes)
+	}
+	if len(shared.NodeIDs) != 2 || shared.NodeIDs[0] != "inst1-pve1" || shared.NodeIDs[1] != "inst1-pve2" {
+		t.Fatalf("shared storage node IDs = %#v, want [inst1-pve1 inst1-pve2]", shared.NodeIDs)
+	}
+}
+
 func TestPollStorageWithNodesOptimizedAttachesZFSPoolForDirStorageOnDatasetPath(t *testing.T) {
 	t.Setenv("PULSE_DATA_DIR", t.TempDir())
 
