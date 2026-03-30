@@ -321,6 +321,9 @@ func (h *HostAgentHandlers) canReadConfig(record *config.APITokenRecord) bool {
 		return true
 	}
 	return record.HasScope(config.ScopeHostConfigRead) ||
+		// Older host-agent tokens may only carry host-agent:report.
+		// Allow them to continue fetching their own config via token binding.
+		record.HasScope(config.ScopeHostReport) ||
 		record.HasScope(config.ScopeHostManage) ||
 		record.HasScope(config.ScopeSettingsWrite)
 }

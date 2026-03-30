@@ -325,7 +325,7 @@ func TestHandleConfigMissingConfigScope(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/agents/host/"+hostID+"/config", nil)
 	attachAPITokenRecord(req, &config.APITokenRecord{
 		ID:     "token-other",
-		Scopes: []string{config.ScopeHostReport},
+		Scopes: []string{config.ScopeMonitoringRead},
 	})
 
 	rec := httptest.NewRecorder()
@@ -333,6 +333,38 @@ func TestHandleConfigMissingConfigScope(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected status %d, got %d", http.StatusForbidden, rec.Code)
+	}
+}
+
+func TestHandleConfigAllowsBoundHostReportScope(t *testing.T) {
+	t.Parallel()
+
+	handler := newHostAgentHandlerForTests(t, models.Host{
+		ID:      "host-1",
+		TokenID: "token-expected",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agents/host/other-host/config", nil)
+	attachAPITokenRecord(req, &config.APITokenRecord{
+		ID:     "token-expected",
+		Scopes: []string{config.ScopeHostReport},
+	})
+
+	rec := httptest.NewRecorder()
+	handler.HandleConfig(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var resp struct {
+		HostID string `json:"hostId"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.HostID != "host-1" {
+		t.Fatalf("expected host id %q, got %q", "host-1", resp.HostID)
 	}
 }
 
