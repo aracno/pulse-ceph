@@ -24,6 +24,12 @@ func TestValidateWebhookURL(t *testing.T) {
 	if err := validateWebhookURL(context.Background(), "ftp://example.com"); err == nil {
 		t.Fatalf("expected error for invalid scheme")
 	}
+	if err := validateWebhookURL(context.Background(), "https://user:pass@example.com"); err == nil {
+		t.Fatalf("expected error for embedded credentials")
+	}
+	if err := validateWebhookURL(context.Background(), "https://example.com/path#frag"); err == nil {
+		t.Fatalf("expected error for fragment")
+	}
 	if err := validateWebhookURL(context.Background(), "http://"); err == nil {
 		t.Fatalf("expected error for missing host")
 	}

@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/rcourtman/pulse-go-rewrite/pkg/netutil"
 	"github.com/rcourtman/pulse-go-rewrite/pkg/tlsutil"
 	"github.com/rs/zerolog/log"
 )
@@ -160,6 +161,19 @@ type auth struct {
 func NewClient(cfg ClientConfig) (*Client, error) {
 	var user, realm string
 
+	hadScheme := strings.HasPrefix(cfg.Host, "http://") || strings.HasPrefix(cfg.Host, "https://")
+	normalizedHost, err := netutil.NormalizeHTTPBaseURL(cfg.Host, "https")
+	if err != nil {
+		return nil, fmt.Errorf("invalid host URL: %w", err)
+	}
+	cfg.Host = strings.TrimSuffix(normalizedHost.String(), "/")
+	if !hadScheme {
+		log.Debug().Str("host", cfg.Host).Msg("No protocol specified in Proxmox host, defaulting to HTTPS")
+	}
+	if normalizedHost.Scheme == "http" {
+		log.Warn().Str("host", cfg.Host).Msg("Using HTTP for Proxmox connection - consider enabling HTTPS")
+	}
+
 	// Log what auth method we're using
 	log.Debug().
 		Str("host", cfg.Host).
@@ -217,7 +231,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		Msg("Proxmox client configured")
 
 	client := &Client{
-		baseURL:    strings.TrimSuffix(cfg.Host, "/") + "/api2/json",
+		baseURL:    cfg.Host + "/api2/json",
 		httpClient: httpClient,
 		config:     cfg,
 		auth: auth{

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rcourtman/pulse-go-rewrite/pkg/netutil"
 	"github.com/rcourtman/pulse-go-rewrite/pkg/tlsutil"
 	"github.com/rs/zerolog/log"
 )
@@ -132,11 +133,16 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		cfg.Timeout = 60 * time.Second
 	}
 
-	if !strings.HasPrefix(cfg.Host, "http://") && !strings.HasPrefix(cfg.Host, "https://") {
-		cfg.Host = "https://" + cfg.Host
+	hadScheme := strings.HasPrefix(cfg.Host, "http://") || strings.HasPrefix(cfg.Host, "https://")
+	normalizedHost, err := netutil.NormalizeHTTPBaseURL(cfg.Host, "https")
+	if err != nil {
+		return nil, fmt.Errorf("invalid host URL: %w", err)
 	}
-
-	if strings.HasPrefix(cfg.Host, "http://") {
+	cfg.Host = strings.TrimSuffix(normalizedHost.String(), "/")
+	if !hadScheme {
+		log.Debug().Str("host", cfg.Host).Msg("No protocol specified in PMG host, defaulting to HTTPS")
+	}
+	if normalizedHost.Scheme == "http" {
 		log.Warn().Str("host", cfg.Host).Msg("Using HTTP for PMG connection - consider enabling HTTPS")
 	}
 
@@ -181,7 +187,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	httpClient := tlsutil.CreateHTTPClientWithTimeout(cfg.VerifySSL, cfg.Fingerprint, cfg.Timeout)
 
 	client := &Client{
-		baseURL:    strings.TrimSuffix(cfg.Host, "/") + "/api2/json",
+		baseURL:    cfg.Host + "/api2/json",
 		httpClient: httpClient,
 		config:     cfg,
 		auth: auth{

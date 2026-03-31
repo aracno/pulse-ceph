@@ -216,11 +216,12 @@ func (w *WebhookDelivery) deliver(url string, event Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), webhookTimeout)
 	defer cancel()
 
-	if err := validateWebhookURL(ctx, url); err != nil {
+	validatedURL, err := validatedWebhookURL(ctx, url)
+	if err != nil {
 		return fmt.Errorf("webhook URL blocked: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, validatedURL.String(), bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("failed to create webhook request: %w", err)
 	}
@@ -245,37 +246,48 @@ func (w *WebhookDelivery) deliver(url string, event Event) error {
 }
 
 func validateWebhookURL(ctx context.Context, rawURL string) error {
+	_, err := validatedWebhookURL(ctx, rawURL)
+	return err
+}
+
+func validatedWebhookURL(ctx context.Context, rawURL string) (*url.URL, error) {
 	if strings.TrimSpace(rawURL) == "" {
-		return fmt.Errorf("URL cannot be empty")
+		return nil, fmt.Errorf("URL cannot be empty")
 	}
 
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("invalid URL format")
+		return nil, fmt.Errorf("invalid URL format")
 	}
 
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("URL scheme must be http or https")
+		return nil, fmt.Errorf("URL scheme must be http or https")
 	}
 
 	if parsed.Host == "" {
-		return fmt.Errorf("URL must have a host")
+		return nil, fmt.Errorf("URL must have a host")
+	}
+	if parsed.User != nil {
+		return nil, fmt.Errorf("embedded credentials are not allowed")
+	}
+	if parsed.Fragment != "" {
+		return nil, fmt.Errorf("URL fragments are not allowed")
 	}
 
 	hostname := parsed.Hostname()
 	if hostname == "" {
-		return fmt.Errorf("URL must have a hostname")
+		return nil, fmt.Errorf("URL must have a hostname")
 	}
 
 	if hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1" {
-		return fmt.Errorf("localhost URLs are not allowed")
+		return nil, fmt.Errorf("localhost URLs are not allowed")
 	}
 
 	if ip := net.ParseIP(hostname); ip != nil {
 		if isPrivateOrReservedIP(ip) {
-			return fmt.Errorf("private or reserved IP addresses are not allowed")
+			return nil, fmt.Errorf("private or reserved IP addresses are not allowed")
 		}
-		return nil
+		return parsed, nil
 	}
 
 	lowerHost := strings.ToLower(hostname)
@@ -289,7 +301,7 @@ func validateWebhookURL(ctx context.Context, rawURL string) error {
 	}
 	for _, pattern := range blockedPatterns {
 		if strings.Contains(lowerHost, pattern) {
-			return fmt.Errorf("internal hostnames are not allowed")
+			return nil, fmt.Errorf("internal hostnames are not allowed")
 		}
 	}
 
@@ -300,18 +312,18 @@ func validateWebhookURL(ctx context.Context, rawURL string) error {
 	defer cancel()
 	addrs, err := resolveWebhookIPs(resolveCtx, hostname)
 	if err != nil {
-		return fmt.Errorf("failed to resolve hostname")
+		return nil, fmt.Errorf("failed to resolve hostname")
 	}
 	if len(addrs) == 0 {
-		return fmt.Errorf("hostname did not resolve")
+		return nil, fmt.Errorf("hostname did not resolve")
 	}
 	for _, addr := range addrs {
 		if isPrivateOrReservedIP(addr.IP) {
-			return fmt.Errorf("hostname resolves to private or reserved IP addresses")
+			return nil, fmt.Errorf("hostname resolves to private or reserved IP addresses")
 		}
 	}
 
-	return nil
+	return parsed, nil
 }
 
 func isPrivateOrReservedIP(ip net.IP) bool {

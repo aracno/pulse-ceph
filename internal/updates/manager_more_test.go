@@ -155,6 +155,7 @@ func TestManagerDownloadFile(t *testing.T) {
 
 	manager := NewManager(&config.Config{})
 	dest := filepath.Join(t.TempDir(), "file.bin")
+	t.Setenv("PULSE_UPDATE_SERVER", server.URL)
 
 	n, err := manager.downloadFile(context.Background(), server.URL, dest)
 	if err != nil {

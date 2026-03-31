@@ -34,6 +34,7 @@ func TestManagerVerifyChecksum(t *testing.T) {
 
 	manager := NewManager(nil)
 	tarballURL := server.URL + "/pulse.tar.gz"
+	t.Setenv("PULSE_UPDATE_SERVER", server.URL)
 
 	if err := manager.verifyChecksum(context.Background(), tarballURL, tarballPath); err != nil {
 		t.Fatalf("verifyChecksum error: %v", err)

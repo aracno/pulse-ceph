@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/rcourtman/pulse-go-rewrite/internal/config"
+	"github.com/rcourtman/pulse-go-rewrite/pkg/netutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -65,6 +67,8 @@ var (
 	stageDelayOnce       sync.Once
 	stageDelayValue      time.Duration
 )
+
+var allowLoopbackUpdateDownloads bool
 
 // Manager handles update operations
 type Manager struct {
@@ -365,11 +369,11 @@ func (m *Manager) ApplyUpdate(ctx context.Context, req ApplyUpdateRequest) error
 	if req.DownloadURL == "" {
 		return fmt.Errorf("download URL is required")
 	}
-	if os.Getenv("PULSE_UPDATE_SERVER") == "" {
-		if !strings.HasPrefix(req.DownloadURL, "https://github.com/rcourtman/Pulse/releases/download/") {
-			return fmt.Errorf("invalid download URL")
-		}
+	validatedDownloadURL, err := validateUpdateDownloadURL(req.DownloadURL)
+	if err != nil {
+		return err
 	}
+	req.DownloadURL = validatedDownloadURL.String()
 
 	// Check if Docker
 	currentInfo, _ := GetCurrentVersion()
@@ -435,7 +439,7 @@ func (m *Manager) ApplyUpdate(ctx context.Context, req ApplyUpdateRequest) error
 	// Create temp directory in a location we can write to
 	// Try multiple locations in order of preference
 	var tempDir string
-	var err error
+	var tempDirErr error
 
 	// Try data directory first
 	dataDir := os.Getenv("PULSE_DATA_DIR")
@@ -444,15 +448,15 @@ func (m *Manager) ApplyUpdate(ctx context.Context, req ApplyUpdateRequest) error
 	}
 
 	// Try to create temp dir in data directory
-	tempDir, err = os.MkdirTemp(dataDir, "pulse-update-*")
-	if err != nil {
+	tempDir, tempDirErr = os.MkdirTemp(dataDir, "pulse-update-*")
+	if tempDirErr != nil {
 		// Fallback to /tmp
-		tempDir, err = os.MkdirTemp("/tmp", "pulse-update-*")
-		if err != nil {
+		tempDir, tempDirErr = os.MkdirTemp("/tmp", "pulse-update-*")
+		if tempDirErr != nil {
 			// Last resort: current directory
-			tempDir, err = os.MkdirTemp(".", "pulse-update-*")
-			if err != nil {
-				tempErr := fmt.Errorf("failed to create temp directory in any location: %w", err)
+			tempDir, tempDirErr = os.MkdirTemp(".", "pulse-update-*")
+			if tempDirErr != nil {
+				tempErr := fmt.Errorf("failed to create temp directory in any location: %w", tempDirErr)
 				m.updateStatus("error", 10, "Failed to create temp directory", tempErr)
 				runErr = tempErr
 				m.queue.MarkCompleted(job.ID, tempErr)
@@ -932,7 +936,12 @@ func inferVersionFromDownloadURL(downloadURL string) string {
 
 // downloadFile downloads a file from URL to dest
 func (m *Manager) downloadFile(ctx context.Context, url, dest string) (int64, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	validatedURL, err := validateUpdateDownloadURL(url)
+	if err != nil {
+		return 0, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", validatedURL.String(), nil)
 	if err != nil {
 		return 0, err
 	}
@@ -966,9 +975,17 @@ func (m *Manager) downloadFile(ctx context.Context, url, dest string) (int64, er
 
 // verifyChecksum downloads and verifies the SHA256 checksum of a file
 func (m *Manager) verifyChecksum(ctx context.Context, tarballURL, tarballPath string) error {
+	validatedTarballURL, err := validateUpdateDownloadURL(tarballURL)
+	if err != nil {
+		return err
+	}
+
 	// Try to find checksum file URL by deriving from tarball URL
 	// Example: pulse-v4.22.0-linux-amd64.tar.gz -> SHA256SUMS or checksums.txt
-	baseURL := tarballURL[:strings.LastIndex(tarballURL, "/")+1]
+	baseURL := *validatedTarballURL
+	baseURL.RawQuery = ""
+	baseURL.Fragment = ""
+	baseURL.Path = baseURL.Path[:strings.LastIndex(baseURL.Path, "/")+1]
 
 	// Common checksum file names used in GitHub releases
 	checksumNames := []string{"SHA256SUMS", "checksums.txt", "SHA256SUMS.txt"}
@@ -978,9 +995,10 @@ func (m *Manager) verifyChecksum(ctx context.Context, tarballURL, tarballPath st
 
 	// Try each checksum filename
 	for _, name := range checksumNames {
-		checksumURL := baseURL + name
+		checksumURL := baseURL
+		checksumURL.Path += name
 
-		req, err := http.NewRequestWithContext(ctx, "GET", checksumURL, nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", checksumURL.String(), nil)
 		if err != nil {
 			continue
 		}
@@ -1007,7 +1025,7 @@ func (m *Manager) verifyChecksum(ctx context.Context, tarballURL, tarballPath st
 	}
 
 	// Parse checksum file to find the hash for our tarball
-	tarballName := filepath.Base(tarballURL)
+	tarballName := filepath.Base(validatedTarballURL.Path)
 	expectedHash := ""
 
 	for _, line := range strings.Split(checksumContent, "\n") {
@@ -1064,6 +1082,20 @@ func (m *Manager) verifyChecksum(ctx context.Context, tarballURL, tarballPath st
 		Msg("Checksum verified successfully")
 
 	return nil
+}
+
+func validateUpdateDownloadURL(rawURL string) (*url.URL, error) {
+	validatedURL, err := netutil.ValidateAbsoluteHTTPURL(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid download URL: %w", err)
+	}
+
+	if os.Getenv("PULSE_UPDATE_SERVER") == "" && !allowLoopbackUpdateDownloads {
+		if validatedURL.Scheme != "https" || validatedURL.Host != "github.com" || !strings.HasPrefix(validatedURL.Path, "/rcourtman/Pulse/releases/download/") {
+			return nil, fmt.Errorf("invalid download URL")
+		}
+	}
+	return validatedURL, nil
 }
 
 // extractTarball extracts a gzipped tarball

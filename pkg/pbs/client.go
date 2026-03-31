@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rcourtman/pulse-go-rewrite/pkg/netutil"
 	"github.com/rcourtman/pulse-go-rewrite/pkg/tlsutil"
 	"github.com/rs/zerolog/log"
 )
@@ -49,16 +50,16 @@ type auth struct {
 
 // NewClient creates a new PBS API client
 func NewClient(cfg ClientConfig) (*Client, error) {
-	// Normalize host URL - ensure it has a protocol
-	if !strings.HasPrefix(cfg.Host, "http://") && !strings.HasPrefix(cfg.Host, "https://") {
-		// Default to HTTPS if no protocol specified
-		cfg.Host = "https://" + cfg.Host
-		// Log that we're defaulting to HTTPS
+	hadScheme := strings.HasPrefix(cfg.Host, "http://") || strings.HasPrefix(cfg.Host, "https://")
+	normalizedHost, err := netutil.NormalizeHTTPBaseURL(cfg.Host, "https")
+	if err != nil {
+		return nil, fmt.Errorf("invalid host URL: %w", err)
+	}
+	cfg.Host = strings.TrimSuffix(normalizedHost.String(), "/")
+	if !hadScheme {
 		log.Debug().Str("host", cfg.Host).Msg("No protocol specified in PBS host, defaulting to HTTPS")
 	}
-
-	// Warn if using HTTP
-	if strings.HasPrefix(cfg.Host, "http://") {
+	if normalizedHost.Scheme == "http" {
 		log.Warn().Str("host", cfg.Host).Msg("Using HTTP for PBS connection. PBS typically requires HTTPS. If connection fails, try using https:// instead")
 	}
 
@@ -116,7 +117,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	httpClient := tlsutil.CreateHTTPClientWithTimeout(cfg.VerifySSL, cfg.Fingerprint, timeout)
 
 	client := &Client{
-		baseURL:    strings.TrimSuffix(cfg.Host, "/") + "/api2/json",
+		baseURL:    cfg.Host + "/api2/json",
 		httpClient: httpClient,
 		config:     cfg,
 		auth: auth{
