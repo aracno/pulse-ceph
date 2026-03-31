@@ -123,8 +123,8 @@ func TestIntFromAny(t *testing.T) {
 		{"string empty", "", 0, false},
 		{"string whitespace", "  42  ", 42, true},
 		{"string invalid", "abc", 0, false},
-		{"uint64 overflow", uint64(maxInt) + 1, 0, false},
-		{"float64 overflow", float64(maxInt) * 2, 0, false},
+		{"uint64 overflow", uint64(math.MaxInt) + 1, 0, false},
+		{"float64 overflow", float64(math.MaxInt) * 2, 0, false},
 	}
 
 	for _, tc := range tests {

@@ -1606,7 +1606,9 @@ func (a *VMIpAddress) UnmarshalJSON(data []byte) error {
 	if prefix > 128 {
 		prefix = 128
 	}
-	a.Prefix = int(prefix)
+	if prefix <= 128 {
+		a.Prefix = int(prefix)
+	}
 	return nil
 }
 
