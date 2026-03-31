@@ -85,6 +85,7 @@ func TestSAMLServiceIdentifiers(t *testing.T) {
 }
 
 func TestRefreshMetadata_Success(t *testing.T) {
+	allowSSOLoopbackFetchForTest(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`<?xml version="1.0"?>
@@ -111,6 +112,7 @@ func TestRefreshMetadata_Success(t *testing.T) {
 }
 
 func TestFetchIDPMetadataFromURL_NonOK(t *testing.T) {
+	allowSSOLoopbackFetchForTest(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))

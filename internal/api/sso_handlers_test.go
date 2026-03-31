@@ -25,6 +25,15 @@ func setTestIP(req *http.Request) {
 	req.RemoteAddr = ip + ":12345"
 }
 
+func allowSSOLoopbackFetchForTest(t *testing.T) {
+	t.Helper()
+	prev := allowLoopbackOutboundFetch
+	allowLoopbackOutboundFetch = true
+	t.Cleanup(func() {
+		allowLoopbackOutboundFetch = prev
+	})
+}
+
 // Sample SAML metadata for testing
 const testSAMLMetadata = `<?xml version="1.0" encoding="UTF-8"?>
 <EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="https://idp.example.com">
@@ -53,6 +62,7 @@ const testOIDCDiscovery = `{
 }`
 
 func TestHandleTestSSOProvider_SAMLSuccess(t *testing.T) {
+	allowSSOLoopbackFetchForTest(t)
 	// Create mock SAML metadata server
 	metadataServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
@@ -138,6 +148,7 @@ func TestHandleTestSSOProvider_SAMLMetadataXML(t *testing.T) {
 }
 
 func TestHandleTestSSOProvider_SAMLFetchError(t *testing.T) {
+	allowSSOLoopbackFetchForTest(t)
 	// Server that returns 500
 	errorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -204,6 +215,7 @@ func TestHandleTestSSOProvider_SAMLInvalidXML(t *testing.T) {
 }
 
 func TestHandleTestSSOProvider_OIDCSuccess(t *testing.T) {
+	allowSSOLoopbackFetchForTest(t)
 	// Create mock OIDC discovery server
 	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/openid-configuration" {
@@ -254,6 +266,7 @@ func TestHandleTestSSOProvider_OIDCSuccess(t *testing.T) {
 }
 
 func TestHandleTestSSOProvider_OIDCFetchError(t *testing.T) {
+	allowSSOLoopbackFetchForTest(t)
 	reqBody := SSOTestRequest{
 		Type: "oidc",
 		OIDC: &OIDCTestConfig{
@@ -360,6 +373,7 @@ func TestHandleTestSSOProvider_MissingConfig(t *testing.T) {
 }
 
 func TestHandleMetadataPreview_Success(t *testing.T) {
+	allowSSOLoopbackFetchForTest(t)
 	// Create mock metadata server
 	metadataServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
@@ -457,6 +471,7 @@ func TestHandleMetadataPreview_InvalidURL(t *testing.T) {
 }
 
 func TestHandleMetadataPreview_FetchError(t *testing.T) {
+	allowSSOLoopbackFetchForTest(t)
 	reqBody := MetadataPreviewRequest{
 		Type:        "saml",
 		MetadataURL: "http://localhost:99999/metadata",

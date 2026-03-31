@@ -194,6 +194,7 @@ func TestSAMLServiceBasicFlows(t *testing.T) {
 }
 
 func TestFetchMetadataFromURL(t *testing.T) {
+	allowSSOLoopbackFetchForTest(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`<?xml version="1.0"?>

@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -72,6 +71,12 @@ func validateURL(urlStr string, allowedSchemes []string) bool {
 		}
 	}
 	return false
+}
+
+func validateSSOFetchURL(ctx context.Context, rawURL string) (*url.URL, error) {
+	return validateOutboundFetchURL(ctx, rawURL, []string{"https", "http"}, outboundURLOptions{
+		allowPrivateIPs: true,
+	})
 }
 
 // SSOProviderResponse represents an SSO provider for API responses
@@ -794,8 +799,17 @@ func (r *Router) testOIDCConnection(ctx context.Context, cfg *OIDCTestConfig) SS
 	// Fetch OIDC discovery document
 	discoveryURL := strings.TrimRight(cfg.IssuerURL, "/") + "/.well-known/openid-configuration"
 
+	validatedDiscoveryURL, err := validateSSOFetchURL(ctx, discoveryURL)
+	if err != nil {
+		return SSOTestResponse{
+			Success: false,
+			Message: "Discovery URL failed security validation",
+			Error:   err.Error(),
+		}
+	}
+
 	httpClient := newTestHTTPClient()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, validatedDiscoveryURL.String(), nil)
 	if err != nil {
 		return SSOTestResponse{
 			Success: false,
@@ -1018,18 +1032,18 @@ func (r *Router) handleMetadataPreview(w http.ResponseWriter, req *http.Request)
 // ============================================================================
 
 func newTestHTTPClient() *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{
-		MinVersion: tls.VersionTLS12,
-	}
-	return &http.Client{
-		Transport: transport,
-		Timeout:   testConnectionTimeout,
-	}
+	return newRestrictedOutboundHTTPClient(testConnectionTimeout, outboundURLOptions{
+		allowPrivateIPs: true,
+	})
 }
 
 func fetchSAMLMetadataFromURL(ctx context.Context, client *http.Client, metadataURL string) ([]byte, *saml.EntityDescriptor, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataURL, nil)
+	validatedURL, err := validateSSOFetchURL(ctx, metadataURL)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, validatedURL.String(), nil)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -2963,6 +2963,18 @@ func (n *NotificationManager) ValidateWebhookURL(webhookURL string) error {
 	return nil
 }
 
+func (n *NotificationManager) validatedWebhookRequestURL(webhookURL string) (*url.URL, error) {
+	if err := n.ValidateWebhookURL(webhookURL); err != nil {
+		return nil, err
+	}
+	parsed, err := url.Parse(webhookURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL format: %w", err)
+	}
+	parsed.Fragment = ""
+	return parsed, nil
+}
+
 // isPrivateIP checks if an IP address is in a private range
 func isPrivateIP(ip net.IP) bool {
 	// Private IPv4 ranges

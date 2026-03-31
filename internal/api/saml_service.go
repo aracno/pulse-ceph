@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"crypto/rsa"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"encoding/xml"
@@ -13,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -73,14 +73,9 @@ func NewSAMLService(ctx context.Context, providerID string, cfg *config.SAMLProv
 }
 
 func newSAMLHTTPClient() *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{
-		MinVersion: tls.VersionTLS12,
-	}
-	return &http.Client{
-		Transport: transport,
-		Timeout:   30 * time.Second,
-	}
+	return newRestrictedOutboundHTTPClient(30*time.Second, outboundURLOptions{
+		allowPrivateIPs: true,
+	})
 }
 
 // loadIDPMetadata loads Identity Provider metadata from URL or XML
@@ -121,7 +116,12 @@ func (s *SAMLService) loadIDPMetadata(ctx context.Context) error {
 }
 
 func (s *SAMLService) fetchIDPMetadataFromURL(ctx context.Context, metadataURL string) (*saml.EntityDescriptor, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metadataURL, nil)
+	validatedURL, err := validateSSOFetchURL(ctx, metadataURL)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, validatedURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +227,7 @@ func (s *SAMLService) addIDPCertificate(metadata *saml.EntityDescriptor) error {
 	var err error
 
 	if s.config.IDPCertFile != "" {
-		certData, err = os.ReadFile(s.config.IDPCertFile)
+		certData, err = readSAMLCredentialFile(s.config.IDPCertFile)
 		if err != nil {
 			return fmt.Errorf("failed to read idp certificate file: %w", err)
 		}
@@ -341,7 +341,7 @@ func (s *SAMLService) loadSPCredentials() (*x509.Certificate, *rsa.PrivateKey, e
 
 	// Load certificate
 	if s.config.SPCertFile != "" {
-		certData, err = os.ReadFile(s.config.SPCertFile)
+		certData, err = readSAMLCredentialFile(s.config.SPCertFile)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to read sp certificate file: %w", err)
 		}
@@ -353,7 +353,7 @@ func (s *SAMLService) loadSPCredentials() (*x509.Certificate, *rsa.PrivateKey, e
 
 	// Load private key
 	if s.config.SPKeyFile != "" {
-		keyData, err = os.ReadFile(s.config.SPKeyFile)
+		keyData, err = readSAMLCredentialFile(s.config.SPKeyFile)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to read sp private key file: %w", err)
 		}
@@ -402,6 +402,26 @@ func (s *SAMLService) loadSPCredentials() (*x509.Certificate, *rsa.PrivateKey, e
 	}
 
 	return cert, key, nil
+}
+
+func readSAMLCredentialFile(rawPath string) ([]byte, error) {
+	cleaned := filepath.Clean(strings.TrimSpace(rawPath))
+	if cleaned == "" {
+		return nil, errors.New("credential file path is empty")
+	}
+
+	absolute, err := filepath.Abs(cleaned)
+	if err != nil {
+		return nil, fmt.Errorf("resolve credential file path: %w", err)
+	}
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("credential file must be a regular file")
+	}
+	return os.ReadFile(absolute)
 }
 
 // MakeAuthRequest creates a SAML AuthnRequest and returns the redirect URL

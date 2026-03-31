@@ -407,7 +407,12 @@ func (n *NotificationManager) sendWebhookOnceWithResponse(webhook EnhancedWebhoo
 		method = "POST"
 	}
 
-	req, err := http.NewRequest(method, webhook.URL, bytes.NewBuffer(payload))
+	validatedURL, err := n.validatedWebhookRequestURL(webhook.URL)
+	if err != nil {
+		return nil, fmt.Errorf("webhook URL validation failed: %w", err)
+	}
+
+	req, err := http.NewRequest(method, validatedURL.String(), bytes.NewBuffer(payload))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -562,7 +567,12 @@ func (n *NotificationManager) TestEnhancedWebhook(webhook EnhancedWebhookConfig)
 		}
 	}
 
-	req, err := http.NewRequest(method, webhookURL, bytes.NewBuffer(payload))
+	validatedURL, err := n.validatedWebhookRequestURL(webhookURL)
+	if err != nil {
+		return 0, "", fmt.Errorf("webhook URL validation failed: %w", err)
+	}
+
+	req, err := http.NewRequest(method, validatedURL.String(), bytes.NewBuffer(payload))
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to create request: %w", err)
 	}
