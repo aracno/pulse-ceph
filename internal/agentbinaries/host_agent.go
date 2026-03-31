@@ -52,6 +52,40 @@ var requiredHostAgentBinaries = []HostAgentBinary{
 	},
 }
 
+var supportedHostAgentTargets = []HostAgentBinary{
+	{Platform: "freebsd", Arch: "amd64"},
+}
+
+// IsSupportedHostAgentPlatform reports whether platform is one of the release-supported host-agent platforms.
+func IsSupportedHostAgentPlatform(platform string) bool {
+	for _, binary := range requiredHostAgentBinaries {
+		if binary.Platform == platform {
+			return true
+		}
+	}
+	for _, binary := range supportedHostAgentTargets {
+		if binary.Platform == platform {
+			return true
+		}
+	}
+	return false
+}
+
+// IsSupportedHostAgentTarget reports whether the platform/arch pair is one of the release-supported host-agent binaries.
+func IsSupportedHostAgentTarget(platform, arch string) bool {
+	for _, binary := range requiredHostAgentBinaries {
+		if binary.Platform == platform && binary.Arch == arch {
+			return true
+		}
+	}
+	for _, binary := range supportedHostAgentTargets {
+		if binary.Platform == platform && binary.Arch == arch {
+			return true
+		}
+	}
+	return false
+}
+
 var downloadMu sync.Mutex
 
 var (

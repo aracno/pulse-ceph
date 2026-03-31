@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rcourtman/pulse-go-rewrite/internal/alerts"
+	"github.com/rcourtman/pulse-go-rewrite/internal/pathutil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -119,11 +120,20 @@ func NewIncidentStore(cfg IncidentStoreConfig) *IncidentStore {
 	}
 
 	if store.dataDir != "" {
-		store.filePath = filepath.Join(store.dataDir, incidentFileName)
-		if err := store.loadFromDisk(); err != nil {
-			log.Warn().Err(err).Msg("Failed to load incident history from disk")
-		} else if len(store.incidents) > 0 {
-			log.Info().Int("count", len(store.incidents)).Msg("Loaded incident history from disk")
+		normalizedDataDir, err := pathutil.NormalizeDir(store.dataDir)
+		if err != nil {
+			log.Warn().Err(err).Str("dataDir", store.dataDir).Msg("Failed to normalize incident data dir")
+			store.dataDir = ""
+		} else {
+			store.dataDir = normalizedDataDir
+			store.filePath = filepath.Join(store.dataDir, incidentFileName)
+		}
+		if store.filePath != "" {
+			if err := store.loadFromDisk(); err != nil {
+				log.Warn().Err(err).Msg("Failed to load incident history from disk")
+			} else if len(store.incidents) > 0 {
+				log.Info().Int("count", len(store.incidents)).Msg("Loaded incident history from disk")
+			}
 		}
 	}
 

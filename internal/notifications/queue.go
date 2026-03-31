@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rcourtman/pulse-go-rewrite/internal/alerts"
+	"github.com/rcourtman/pulse-go-rewrite/internal/pathutil"
 	"github.com/rcourtman/pulse-go-rewrite/internal/utils"
 	"github.com/rs/zerolog/log"
 	_ "modernc.org/sqlite"
@@ -67,6 +68,11 @@ func NewNotificationQueue(dataDir string) (*NotificationQueue, error) {
 	if dataDir == "" {
 		dataDir = filepath.Join(utils.GetDataDir(), "notifications")
 	}
+	normalizedDir, err := pathutil.NormalizeDir(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to normalize notification queue directory: %w", err)
+	}
+	dataDir = normalizedDir
 
 	// Ensure directory exists
 	if err := os.MkdirAll(dataDir, 0755); err != nil {

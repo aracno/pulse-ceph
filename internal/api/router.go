@@ -7129,6 +7129,18 @@ func (r *Router) handleDownloadHostAgent(w http.ResponseWriter, req *http.Reques
 		http.Error(w, "Invalid arch parameter", http.StatusBadRequest)
 		return
 	}
+	if archParam != "" && platformParam == "" {
+		http.Error(w, "arch parameter requires platform", http.StatusBadRequest)
+		return
+	}
+	if platformParam != "" && !agentbinaries.IsSupportedHostAgentPlatform(platformParam) {
+		http.Error(w, "Unsupported platform parameter", http.StatusBadRequest)
+		return
+	}
+	if platformParam != "" && archParam != "" && !agentbinaries.IsSupportedHostAgentTarget(platformParam, archParam) {
+		http.Error(w, "Unsupported platform/arch combination", http.StatusBadRequest)
+		return
+	}
 
 	checkedPaths, served := r.tryServeHostAgentBinary(w, req, platformParam, archParam)
 	if served {

@@ -20,12 +20,12 @@ func setupTempPulseBin(t *testing.T) string {
 
 func TestHandleDownloadHostAgentServesWindowsExe(t *testing.T) {
 	binDir := setupTempPulseBin(t)
-	filePath := filepath.Join(binDir, "pulse-host-agent-windows-unit-test.exe")
+	filePath := filepath.Join(binDir, "pulse-host-agent-windows-amd64.exe")
 	if err := os.WriteFile(filePath, []byte("exe-binary"), 0o755); err != nil {
 		t.Fatalf("failed to write test binary: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/download/pulse-host-agent?platform=windows&arch=unit-test", nil)
+	req := httptest.NewRequest(http.MethodGet, "/download/pulse-host-agent?platform=windows&arch=amd64", nil)
 	rr := httptest.NewRecorder()
 
 	router := &Router{}
@@ -65,7 +65,7 @@ func TestHandleDownloadHostAgentServesLinuxArm64(t *testing.T) {
 
 func TestHandleDownloadHostAgentServesChecksumForWindowsExe(t *testing.T) {
 	const (
-		arch     = "unit-sha"
+		arch     = "amd64"
 		filename = "pulse-host-agent-windows-" + arch + ".exe"
 	)
 	binDir := setupTempPulseBin(t)
@@ -89,6 +89,30 @@ func TestHandleDownloadHostAgentServesChecksumForWindowsExe(t *testing.T) {
 	expected := fmt.Sprintf("%x", sha256.Sum256(payload))
 	if got := strings.TrimSpace(rr.Body.String()); got != expected {
 		t.Fatalf("unexpected checksum body: got %q want %q", got, expected)
+	}
+}
+
+func TestHandleDownloadHostAgentRejectsArchWithoutPlatform(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/download/pulse-host-agent?arch=amd64", nil)
+	rr := httptest.NewRecorder()
+
+	router := &Router{}
+	router.handleDownloadHostAgent(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %d", rr.Code)
+	}
+}
+
+func TestHandleDownloadHostAgentRejectsUnsupportedTarget(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/download/pulse-host-agent?platform=windows&arch=unit-test", nil)
+	rr := httptest.NewRecorder()
+
+	router := &Router{}
+	router.handleDownloadHostAgent(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %d", rr.Code)
 	}
 }
 

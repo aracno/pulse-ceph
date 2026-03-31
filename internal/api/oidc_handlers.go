@@ -304,12 +304,9 @@ func (r *Router) handleOIDCCallback(w http.ResponseWriter, req *http.Request) {
 
 	LogAuditEventForTenant(GetOrgID(req.Context()), "oidc_login", username, GetClientIP(req), req.URL.Path, true, "OIDC login success")
 
-	target := sanitizeOIDCReturnTo(entry.ReturnTo)
-	if target == "" {
-		target = "/"
-	}
-	target = addQueryParam(target, "oidc", "success")
-	http.Redirect(w, req, target, http.StatusFound)
+	http.Redirect(w, req, buildLocalRedirectTarget(entry.ReturnTo, map[string]string{
+		"oidc": "success",
+	}), http.StatusFound)
 }
 
 func (r *Router) getOIDCService(ctx context.Context, redirectURL string) (*OIDCService, error) {
@@ -357,16 +354,36 @@ func sanitizeOIDCReturnTo(raw string) string {
 }
 
 func (r *Router) redirectOIDCError(w http.ResponseWriter, req *http.Request, returnTo string, code string) {
-	target := returnTo
+	target := buildLocalRedirectTarget(returnTo, map[string]string{
+		"oidc":       "error",
+		"oidc_error": code,
+	})
+	http.Redirect(w, req, target, http.StatusFound)
+}
+
+func buildLocalRedirectTarget(returnTo string, queryParams map[string]string) string {
+	target := sanitizeOIDCReturnTo(returnTo)
 	if target == "" {
 		target = "/"
 	}
-	target = addQueryParam(target, "oidc", "error")
-	if code != "" {
-		target = addQueryParam(target, "oidc_error", code)
+
+	parsed, err := url.Parse(target)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" {
+		parsed = &url.URL{Path: "/"}
+	}
+	if parsed.Path == "" {
+		parsed.Path = "/"
 	}
 
-	http.Redirect(w, req, target, http.StatusFound)
+	query := parsed.Query()
+	for key, value := range queryParams {
+		if key == "" || value == "" {
+			continue
+		}
+		query.Set(key, value)
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.RequestURI()
 }
 
 func addQueryParam(path, key, value string) string {

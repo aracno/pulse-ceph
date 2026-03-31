@@ -82,6 +82,15 @@ func TestRedirectOIDCError(t *testing.T) {
 	}
 }
 
+func TestBuildLocalRedirectTargetRejectsAbsoluteURL(t *testing.T) {
+	target := buildLocalRedirectTarget("https://evil.example.com/pwn", map[string]string{
+		"oidc": "error",
+	})
+	if target != "/?oidc=error" {
+		t.Fatalf("target = %q, want /?oidc=error", target)
+	}
+}
+
 func TestEnsureOIDCConfig_Defaults(t *testing.T) {
 	cfg := &config.Config{PublicURL: "https://pulse.example.com"}
 	router := &Router{config: cfg}
