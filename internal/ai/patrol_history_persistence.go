@@ -182,6 +182,25 @@ type PatrolRunHistoryStore struct {
 	onSaveError   func(err error)
 }
 
+func clampHistoryCount(value, minValue, maxValue int) int {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}
+
+func normalizeHistoryRequestCount(requested, storeMax, available int) int {
+	if requested <= 0 {
+		requested = MaxPatrolRunHistory
+	}
+	requested = clampHistoryCount(requested, 0, MaxPatrolRunHistory)
+	requested = clampHistoryCount(requested, 0, storeMax)
+	return clampHistoryCount(requested, 0, available)
+}
+
 // NewPatrolRunHistoryStore creates a new patrol run history store
 func NewPatrolRunHistoryStore(maxRuns int) *PatrolRunHistoryStore {
 	if maxRuns <= 0 {
@@ -258,12 +277,7 @@ func (s *PatrolRunHistoryStore) GetRecent(n int) []PatrolRunRecord {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if n <= 0 || n > s.maxRuns {
-		n = s.maxRuns
-	}
-	if n > len(s.runs) {
-		n = len(s.runs)
-	}
+	n = normalizeHistoryRequestCount(n, s.maxRuns, len(s.runs))
 
 	result := make([]PatrolRunRecord, n)
 	copy(result, s.runs[:n])

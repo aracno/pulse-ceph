@@ -1,16 +1,28 @@
 package proxmox
 
-import "math"
+import (
+	"math"
+	"strconv"
+)
 
 func intFromInt64Checked(v int64) (int, bool) {
-	if v > int64(math.MaxInt) || v < int64(math.MinInt) {
-		return 0, false
+	if strconv.IntSize == 32 {
+		if v > math.MaxInt32 || v < math.MinInt32 {
+			return 0, false
+		}
+		return int(int32(v)), true
 	}
 	return int(v), true
 }
 
 func intFromUint64Checked(v uint64) (int, bool) {
-	if v > uint64(math.MaxInt) {
+	if strconv.IntSize == 32 {
+		if v > math.MaxInt32 {
+			return 0, false
+		}
+		return int(int32(v)), true
+	}
+	if v > math.MaxInt64 {
 		return 0, false
 	}
 	return int(v), true

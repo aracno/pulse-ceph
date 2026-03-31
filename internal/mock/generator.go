@@ -662,12 +662,13 @@ func ptrFloat64(v float64) *float64 {
 }
 
 func generateNodes(config MockConfig) []models.Node {
-	nodes := make([]models.Node, 0, config.NodeCount)
+	nodeCount := clampInt(config.NodeCount, 0, maxMockNodeCount)
+	nodes := make([]models.Node, 0, nodeCount)
 
 	// First 5 nodes are part of the cluster
 	clusterNodeCount := 5
-	if config.NodeCount < 5 {
-		clusterNodeCount = config.NodeCount
+	if nodeCount < 5 {
+		clusterNodeCount = nodeCount
 	}
 
 	// Generate clustered nodes
@@ -714,7 +715,7 @@ func generateNodes(config MockConfig) []models.Node {
 	}
 
 	// Generate standalone nodes (if we have more than 5 nodes)
-	for i := clusterNodeCount; i < config.NodeCount; i++ {
+	for i := clusterNodeCount; i < nodeCount; i++ {
 		nodeName := fmt.Sprintf("standalone%d", i-clusterNodeCount+1)
 		isHighLoad := false
 		for _, n := range config.HighLoadNodes {
