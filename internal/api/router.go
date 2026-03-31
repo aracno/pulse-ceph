@@ -7228,34 +7228,19 @@ func (r *Router) tryServeHostAgentBinary(w http.ResponseWriter, req *http.Reques
 }
 
 func hostAgentSearchCandidates(platformParam, archParam string) []string {
-	searchPaths := make([]string, 0, 12)
-	strictMode := platformParam != "" && archParam != ""
-
-	if strictMode {
-		searchPaths = append(searchPaths,
-			filepath.Join(pulseBinDir(), fmt.Sprintf("pulse-host-agent-%s-%s", platformParam, archParam)),
-			filepath.Join("/opt/pulse", fmt.Sprintf("pulse-host-agent-%s-%s", platformParam, archParam)),
-			filepath.Join("/app", fmt.Sprintf("pulse-host-agent-%s-%s", platformParam, archParam)),
-		)
+	filenames := agentbinaries.HostAgentCandidateFilenames(platformParam, archParam)
+	if len(filenames) == 0 {
+		return nil
 	}
 
-	if platformParam != "" && !strictMode {
-		searchPaths = append(searchPaths,
-			filepath.Join(pulseBinDir(), "pulse-host-agent-"+platformParam),
-			filepath.Join("/opt/pulse", "pulse-host-agent-"+platformParam),
-			filepath.Join("/app", "pulse-host-agent-"+platformParam),
-		)
+	dirs := []string{pulseBinDir(), "/opt/pulse", "/app"}
+	searchPaths := make([]string, 0, len(dirs)*len(filenames))
+	for _, dir := range dirs {
+		for _, filename := range filenames {
+			searchPaths = append(searchPaths, filepath.Join(dir, filename))
+		}
 	}
-
-	if !strictMode && platformParam == "" {
-		searchPaths = append(searchPaths,
-			filepath.Join(pulseBinDir(), "pulse-host-agent"),
-			"/opt/pulse/pulse-host-agent",
-			filepath.Join("/app", "pulse-host-agent"),
-		)
-	}
-
-	return searchPaths
+	return dedupeStrings(searchPaths)
 }
 
 func dedupeStrings(values []string) []string {

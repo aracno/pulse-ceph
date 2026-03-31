@@ -53,7 +53,7 @@ var requiredHostAgentBinaries = []HostAgentBinary{
 }
 
 var supportedHostAgentTargets = []HostAgentBinary{
-	{Platform: "freebsd", Arch: "amd64"},
+	{Platform: "freebsd", Arch: "amd64", Filenames: []string{"pulse-host-agent-freebsd-amd64"}},
 }
 
 // IsSupportedHostAgentPlatform reports whether platform is one of the release-supported host-agent platforms.
@@ -84,6 +84,41 @@ func IsSupportedHostAgentTarget(platform, arch string) bool {
 		}
 	}
 	return false
+}
+
+// HostAgentCandidateFilenames returns the fixed allowlisted filenames for a
+// requested host-agent target. This avoids deriving filenames directly from
+// untrusted request parameters in higher-level handlers.
+func HostAgentCandidateFilenames(platform, arch string) []string {
+	if platform == "" {
+		return []string{"pulse-host-agent"}
+	}
+	if arch == "" {
+		switch platform {
+		case "linux":
+			return []string{"pulse-host-agent-linux"}
+		case "darwin":
+			return []string{"pulse-host-agent-darwin"}
+		case "windows":
+			return []string{"pulse-host-agent-windows", "pulse-host-agent-windows.exe"}
+		case "freebsd":
+			return []string{"pulse-host-agent-freebsd"}
+		default:
+			return nil
+		}
+	}
+
+	for _, binary := range requiredHostAgentBinaries {
+		if binary.Platform == platform && binary.Arch == arch {
+			return append([]string(nil), binary.Filenames...)
+		}
+	}
+	for _, binary := range supportedHostAgentTargets {
+		if binary.Platform == platform && binary.Arch == arch {
+			return append([]string(nil), binary.Filenames...)
+		}
+	}
+	return nil
 }
 
 var downloadMu sync.Mutex
