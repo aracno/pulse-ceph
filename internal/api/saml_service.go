@@ -47,6 +47,10 @@ type SAMLAuthResult struct {
 	Attributes map[string][]string
 }
 
+func normalizeSAMLBaseURL(baseURL string) string {
+	return strings.TrimRight(strings.TrimSpace(baseURL), "/")
+}
+
 // NewSAMLService creates a new SAML service for a provider
 func NewSAMLService(ctx context.Context, providerID string, cfg *config.SAMLProviderConfig, baseURL string) (*SAMLService, error) {
 	if cfg == nil {
@@ -56,7 +60,7 @@ func NewSAMLService(ctx context.Context, providerID string, cfg *config.SAMLProv
 	service := &SAMLService{
 		providerID: providerID,
 		config:     cfg,
-		baseURL:    strings.TrimRight(baseURL, "/"),
+		baseURL:    normalizeSAMLBaseURL(baseURL),
 		httpClient: newSAMLHTTPClient(),
 	}
 
@@ -268,6 +272,17 @@ func (s *SAMLService) addIDPCertificate(metadata *saml.EntityDescriptor) error {
 }
 
 func (s *SAMLService) initServiceProvider() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.initServiceProviderLocked()
+}
+
+func (s *SAMLService) initServiceProviderLocked() error {
+	if s.idpMetadata == nil {
+		return errors.New("idp metadata not loaded")
+	}
+
 	// Build SP Entity ID
 	spEntityID := s.config.SPEntityID
 	if spEntityID == "" {
@@ -334,6 +349,14 @@ func (s *SAMLService) initServiceProvider() error {
 		Msg("Initialized SAML Service Provider")
 
 	return nil
+}
+
+func (s *SAMLService) SetBaseURL(baseURL string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.baseURL = normalizeSAMLBaseURL(baseURL)
+	return s.initServiceProviderLocked()
 }
 
 func (s *SAMLService) loadSPCredentials() (*x509.Certificate, *rsa.PrivateKey, error) {
@@ -628,6 +651,14 @@ func (s *SAMLService) RefreshMetadata(ctx context.Context) error {
 // ProviderID returns the provider identifier
 func (s *SAMLService) ProviderID() string {
 	return s.providerID
+}
+
+// GetBaseURL returns the normalized base URL used to build SP endpoints.
+func (s *SAMLService) GetBaseURL() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.baseURL
 }
 
 // GetSPEntityID returns the Service Provider Entity ID

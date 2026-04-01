@@ -23,6 +23,9 @@ func TestSecurityOIDCHandlers_GetConfig(t *testing.T) {
 			UsernameClaim: "sub",
 			EmailClaim:    "email",
 			GroupsClaim:   "groups",
+			GroupRoleMappings: map[string]string{
+				"group-uuid": "viewer",
+			},
 		},
 	}
 	router := &Router{config: cfg}
@@ -48,6 +51,9 @@ func TestSecurityOIDCHandlers_GetConfig(t *testing.T) {
 	}
 	if !resp.ClientSecretSet {
 		t.Fatalf("expected client secret to be marked as set")
+	}
+	if got := resp.GroupRoleMappings["group-uuid"]; got != "viewer" {
+		t.Fatalf("expected group role mappings to be included, got %q", got)
 	}
 }
 

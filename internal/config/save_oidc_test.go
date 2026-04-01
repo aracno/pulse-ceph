@@ -34,6 +34,9 @@ func TestSaveOIDCConfig(t *testing.T) {
 		Enabled:   true,
 		IssuerURL: "https://issuer.com",
 		ClientID:  "client-id",
+		GroupRoleMappings: map[string]string{
+			"group-uuid": "viewer",
+		},
 	}
 
 	err = SaveOIDCConfig(settings)
@@ -43,6 +46,7 @@ func TestSaveOIDCConfig(t *testing.T) {
 	loaded, err := p.LoadOIDCConfig()
 	require.NoError(t, err)
 	assert.Equal(t, settings.IssuerURL, loaded.IssuerURL)
+	assert.Equal(t, "viewer", loaded.GroupRoleMappings["group-uuid"])
 }
 
 func TestLoadHostMetadata_Wait(t *testing.T) {

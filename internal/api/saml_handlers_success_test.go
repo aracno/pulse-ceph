@@ -54,6 +54,32 @@ func TestHandleSAMLMetadata_Success(t *testing.T) {
 	}
 }
 
+func TestHandleSAMLMetadata_SynchronizesConfiguredPublicURL(t *testing.T) {
+	router := &Router{
+		config:      &config.Config{PublicURL: "https://pulse.example.com"},
+		samlManager: NewSAMLServiceManager(""),
+		ssoConfig: &config.SSOConfig{
+			Providers: []config.SSOProvider{testSAMLProvider("okta", true)},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/saml/okta/metadata", nil)
+	rr := httptest.NewRecorder()
+
+	router.handleSAMLMetadata(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `entityID="https://pulse.example.com/saml/okta"`) {
+		t.Fatalf("expected absolute entityID in metadata, got %q", body)
+	}
+	if !strings.Contains(body, `Location="https://pulse.example.com/api/saml/okta/acs"`) {
+		t.Fatalf("expected absolute ACS URL in metadata, got %q", body)
+	}
+}
+
 func TestHandleSAMLLogin_SuccessGetAndPost(t *testing.T) {
 	router := newSAMLRouter(t, testSAMLProvider("okta", true))
 

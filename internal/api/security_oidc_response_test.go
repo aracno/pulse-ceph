@@ -180,3 +180,24 @@ func TestMakeOIDCResponse_SlicesCopied(t *testing.T) {
 		t.Error("response AllowedGroups should be a copy, not a reference")
 	}
 }
+
+func TestMakeOIDCResponse_GroupRoleMappingsCopied(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.OIDCConfig{
+		GroupRoleMappings: map[string]string{
+			"group-a": "viewer",
+		},
+	}
+
+	resp := makeOIDCResponse(cfg, "https://pulse.example.com")
+
+	if got := resp.GroupRoleMappings["group-a"]; got != "viewer" {
+		t.Fatalf("expected group role mapping to round trip, got %q", got)
+	}
+
+	cfg.GroupRoleMappings["group-a"] = "admin"
+	if got := resp.GroupRoleMappings["group-a"]; got != "viewer" {
+		t.Fatalf("expected response group role mappings to be copied, got %q", got)
+	}
+}

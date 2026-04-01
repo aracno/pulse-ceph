@@ -40,21 +40,22 @@ func (r *Router) handleUpdateOIDCConfig(w http.ResponseWriter, req *http.Request
 	}
 
 	var payload struct {
-		Enabled           bool     `json:"enabled"`
-		IssuerURL         string   `json:"issuerUrl"`
-		ClientID          string   `json:"clientId"`
-		ClientSecret      *string  `json:"clientSecret,omitempty"`
-		RedirectURL       string   `json:"redirectUrl"`
-		LogoutURL         string   `json:"logoutUrl"`
-		Scopes            []string `json:"scopes"`
-		UsernameClaim     string   `json:"usernameClaim"`
-		EmailClaim        string   `json:"emailClaim"`
-		GroupsClaim       string   `json:"groupsClaim"`
-		AllowedGroups     []string `json:"allowedGroups"`
-		AllowedDomains    []string `json:"allowedDomains"`
-		AllowedEmails     []string `json:"allowedEmails"`
-		ClearClientSecret bool     `json:"clearClientSecret"`
-		CABundle          *string  `json:"caBundle"`
+		Enabled           bool              `json:"enabled"`
+		IssuerURL         string            `json:"issuerUrl"`
+		ClientID          string            `json:"clientId"`
+		ClientSecret      *string           `json:"clientSecret,omitempty"`
+		RedirectURL       string            `json:"redirectUrl"`
+		LogoutURL         string            `json:"logoutUrl"`
+		Scopes            []string          `json:"scopes"`
+		UsernameClaim     string            `json:"usernameClaim"`
+		EmailClaim        string            `json:"emailClaim"`
+		GroupsClaim       string            `json:"groupsClaim"`
+		AllowedGroups     []string          `json:"allowedGroups"`
+		AllowedDomains    []string          `json:"allowedDomains"`
+		AllowedEmails     []string          `json:"allowedEmails"`
+		GroupRoleMappings map[string]string `json:"groupRoleMappings"`
+		ClearClientSecret bool              `json:"clearClientSecret"`
+		CABundle          *string           `json:"caBundle"`
 	}
 
 	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
@@ -75,8 +76,11 @@ func (r *Router) handleUpdateOIDCConfig(w http.ResponseWriter, req *http.Request
 		AllowedGroups:  append([]string{}, payload.AllowedGroups...),
 		AllowedDomains: append([]string{}, payload.AllowedDomains...),
 		AllowedEmails:  append([]string{}, payload.AllowedEmails...),
-		CABundle:       strings.TrimSpace(cfg.CABundle),
-		EnvOverrides:   make(map[string]bool),
+		GroupRoleMappings: cloneStringMap(
+			payload.GroupRoleMappings,
+		),
+		CABundle:     strings.TrimSpace(cfg.CABundle),
+		EnvOverrides: make(map[string]bool),
 	}
 
 	// Preserve existing secret unless explicitly changed.
@@ -115,22 +119,23 @@ func (r *Router) handleUpdateOIDCConfig(w http.ResponseWriter, req *http.Request
 }
 
 type oidcResponse struct {
-	Enabled         bool            `json:"enabled"`
-	IssuerURL       string          `json:"issuerUrl"`
-	ClientID        string          `json:"clientId"`
-	RedirectURL     string          `json:"redirectUrl"`
-	LogoutURL       string          `json:"logoutUrl"`
-	Scopes          []string        `json:"scopes"`
-	UsernameClaim   string          `json:"usernameClaim"`
-	EmailClaim      string          `json:"emailClaim"`
-	GroupsClaim     string          `json:"groupsClaim"`
-	AllowedGroups   []string        `json:"allowedGroups"`
-	AllowedDomains  []string        `json:"allowedDomains"`
-	AllowedEmails   []string        `json:"allowedEmails"`
-	CABundle        string          `json:"caBundle"`
-	ClientSecretSet bool            `json:"clientSecretSet"`
-	DefaultRedirect string          `json:"defaultRedirect"`
-	EnvOverrides    map[string]bool `json:"envOverrides,omitempty"`
+	Enabled           bool              `json:"enabled"`
+	IssuerURL         string            `json:"issuerUrl"`
+	ClientID          string            `json:"clientId"`
+	RedirectURL       string            `json:"redirectUrl"`
+	LogoutURL         string            `json:"logoutUrl"`
+	Scopes            []string          `json:"scopes"`
+	UsernameClaim     string            `json:"usernameClaim"`
+	EmailClaim        string            `json:"emailClaim"`
+	GroupsClaim       string            `json:"groupsClaim"`
+	AllowedGroups     []string          `json:"allowedGroups"`
+	AllowedDomains    []string          `json:"allowedDomains"`
+	AllowedEmails     []string          `json:"allowedEmails"`
+	GroupRoleMappings map[string]string `json:"groupRoleMappings"`
+	CABundle          string            `json:"caBundle"`
+	ClientSecretSet   bool              `json:"clientSecretSet"`
+	DefaultRedirect   string            `json:"defaultRedirect"`
+	EnvOverrides      map[string]bool   `json:"envOverrides,omitempty"`
 }
 
 func makeOIDCResponse(cfg *config.OIDCConfig, publicURL string) oidcResponse {
@@ -140,18 +145,21 @@ func makeOIDCResponse(cfg *config.OIDCConfig, publicURL string) oidcResponse {
 	}
 
 	resp := oidcResponse{
-		Enabled:         cfg.Enabled,
-		IssuerURL:       cfg.IssuerURL,
-		ClientID:        cfg.ClientID,
-		RedirectURL:     cfg.RedirectURL,
-		LogoutURL:       cfg.LogoutURL,
-		Scopes:          append([]string{}, cfg.Scopes...),
-		UsernameClaim:   cfg.UsernameClaim,
-		EmailClaim:      cfg.EmailClaim,
-		GroupsClaim:     cfg.GroupsClaim,
-		AllowedGroups:   append([]string{}, cfg.AllowedGroups...),
-		AllowedDomains:  append([]string{}, cfg.AllowedDomains...),
-		AllowedEmails:   append([]string{}, cfg.AllowedEmails...),
+		Enabled:        cfg.Enabled,
+		IssuerURL:      cfg.IssuerURL,
+		ClientID:       cfg.ClientID,
+		RedirectURL:    cfg.RedirectURL,
+		LogoutURL:      cfg.LogoutURL,
+		Scopes:         append([]string{}, cfg.Scopes...),
+		UsernameClaim:  cfg.UsernameClaim,
+		EmailClaim:     cfg.EmailClaim,
+		GroupsClaim:    cfg.GroupsClaim,
+		AllowedGroups:  append([]string{}, cfg.AllowedGroups...),
+		AllowedDomains: append([]string{}, cfg.AllowedDomains...),
+		AllowedEmails:  append([]string{}, cfg.AllowedEmails...),
+		GroupRoleMappings: cloneStringMap(
+			cfg.GroupRoleMappings,
+		),
 		CABundle:        cfg.CABundle,
 		ClientSecretSet: cfg.ClientSecret != "",
 		DefaultRedirect: config.DefaultRedirectURL(publicURL),
@@ -165,4 +173,26 @@ func makeOIDCResponse(cfg *config.OIDCConfig, publicURL string) oidcResponse {
 	}
 
 	return resp
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+
+	cloned := make(map[string]string, len(input))
+	for key, value := range input {
+		trimmedKey := strings.TrimSpace(key)
+		trimmedValue := strings.TrimSpace(value)
+		if trimmedKey == "" || trimmedValue == "" {
+			continue
+		}
+		cloned[trimmedKey] = trimmedValue
+	}
+
+	if len(cloned) == 0 {
+		return nil
+	}
+
+	return cloned
 }

@@ -24,7 +24,13 @@ func newTestSAMLService(t *testing.T, providerID string, metadataXML string) *SA
 
 func TestHandleSAMLACS_ProcessResponseError(t *testing.T) {
 	router := newSAMLRouter(t, testSAMLProvider("okta", true))
-	router.samlManager.services["okta"] = &SAMLService{}
+	metadataXML := `<?xml version="1.0"?>
+<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="idp">
+  <IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+    <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://idp.example.com/sso"/>
+  </IDPSSODescriptor>
+</EntityDescriptor>`
+	router.samlManager.services["okta"] = newTestSAMLService(t, "okta", metadataXML)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/saml/okta/acs", nil)
 	rec := httptest.NewRecorder()

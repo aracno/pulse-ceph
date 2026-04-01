@@ -25,7 +25,7 @@ type SAMLServiceManager struct {
 func NewSAMLServiceManager(baseURL string) *SAMLServiceManager {
 	return &SAMLServiceManager{
 		services: make(map[string]*SAMLService),
-		baseURL:  baseURL,
+		baseURL:  normalizeSAMLBaseURL(baseURL),
 	}
 }
 
@@ -34,6 +34,27 @@ func (m *SAMLServiceManager) GetService(providerID string) *SAMLService {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.services[providerID]
+}
+
+// SetBaseURL updates the manager base URL and refreshes all initialized services.
+func (m *SAMLServiceManager) SetBaseURL(baseURL string) error {
+	normalized := normalizeSAMLBaseURL(baseURL)
+
+	m.mu.Lock()
+	m.baseURL = normalized
+	services := make([]*SAMLService, 0, len(m.services))
+	for _, service := range m.services {
+		services = append(services, service)
+	}
+	m.mu.Unlock()
+
+	for _, service := range services {
+		if err := service.SetBaseURL(normalized); err != nil {
+			return fmt.Errorf("refresh provider %s: %w", service.ProviderID(), err)
+		}
+	}
+
+	return nil
 }
 
 // InitializeProvider creates or updates a SAML service for a provider
@@ -61,6 +82,19 @@ func (m *SAMLServiceManager) RemoveProvider(providerID string) {
 	delete(m.services, providerID)
 }
 
+func (r *Router) syncSAMLBaseURL(req *http.Request) error {
+	if r == nil || r.samlManager == nil {
+		return nil
+	}
+
+	baseURL := normalizeSAMLBaseURL(r.resolvePublicURL(req))
+	if baseURL == "" {
+		return nil
+	}
+
+	return r.samlManager.SetBaseURL(baseURL)
+}
+
 // handleSAMLLogin initiates a SAML authentication flow
 func (r *Router) handleSAMLLogin(w http.ResponseWriter, req *http.Request) {
 	providerID := extractSAMLProviderID(req.URL.Path, "login")
@@ -78,6 +112,12 @@ func (r *Router) handleSAMLLogin(w http.ResponseWriter, req *http.Request) {
 	provider := r.getSSOProvider(providerID)
 	if provider == nil || provider.Type != config.SSOProviderTypeSAML || !provider.Enabled {
 		writeErrorResponse(w, http.StatusNotFound, "provider_not_found", "SAML provider not found or not enabled", nil)
+		return
+	}
+
+	if err := r.syncSAMLBaseURL(req); err != nil {
+		log.Error().Err(err).Str("provider_id", providerID).Msg("Failed to synchronize SAML provider base URL")
+		writeErrorResponse(w, http.StatusInternalServerError, "saml_init_failed", "Failed to initialize SAML provider", nil)
 		return
 	}
 
@@ -147,6 +187,12 @@ func (r *Router) handleSAMLACS(w http.ResponseWriter, req *http.Request) {
 	provider := r.getSSOProvider(providerID)
 	if provider == nil || provider.Type != config.SSOProviderTypeSAML || !provider.Enabled {
 		r.redirectSAMLError(w, req, "", "provider_not_found")
+		return
+	}
+
+	if err := r.syncSAMLBaseURL(req); err != nil {
+		log.Error().Err(err).Str("provider_id", providerID).Msg("Failed to synchronize SAML provider base URL")
+		r.redirectSAMLError(w, req, "", "saml_init_failed")
 		return
 	}
 
@@ -291,6 +337,12 @@ func (r *Router) handleSAMLMetadata(w http.ResponseWriter, req *http.Request) {
 	provider := r.getSSOProvider(providerID)
 	if provider == nil || provider.Type != config.SSOProviderTypeSAML {
 		writeErrorResponse(w, http.StatusNotFound, "provider_not_found", "SAML provider not found", nil)
+		return
+	}
+
+	if err := r.syncSAMLBaseURL(req); err != nil {
+		log.Error().Err(err).Str("provider_id", providerID).Msg("Failed to synchronize SAML provider base URL")
+		writeErrorResponse(w, http.StatusInternalServerError, "saml_init_failed", "Failed to initialize SAML provider", nil)
 		return
 	}
 
@@ -529,6 +581,12 @@ func (r *Router) getSSOProvider(providerID string) *config.SSOProvider {
 func (r *Router) InitializeSAMLProviders(ctx context.Context) error {
 	if r.ssoConfig == nil {
 		return nil
+	}
+
+	if publicURL := normalizeSAMLBaseURL(r.config.PublicURL); publicURL != "" {
+		if err := r.samlManager.SetBaseURL(publicURL); err != nil {
+			log.Warn().Err(err).Msg("Failed to synchronize SAML base URL before provider initialization")
+		}
 	}
 
 	for _, provider := range r.ssoConfig.Providers {

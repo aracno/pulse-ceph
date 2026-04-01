@@ -201,8 +201,9 @@ func NewRouter(cfg *config.Config, monitor *monitoring.Monitor, mtMonitor *monit
 		auth.SetAdminUser(cfg.AuthUser)
 	}
 
-	// Initialize SAML manager (baseURL will be set dynamically on first use)
-	r.samlManager = NewSAMLServiceManager("")
+	// Initialize SAML manager with any configured public URL so startup-loaded providers
+	// build absolute metadata when a canonical public endpoint is already known.
+	r.samlManager = NewSAMLServiceManager(cfg.PublicURL)
 
 	r.initializeBootstrapToken()
 
@@ -2162,6 +2163,11 @@ func (r *Router) SetMonitor(m *monitoring.Monitor) {
 		if url := strings.TrimSpace(r.config.PublicURL); url != "" {
 			if mgr := m.GetNotificationManager(); mgr != nil {
 				mgr.SetPublicURL(url)
+			}
+			if r.samlManager != nil {
+				if err := r.samlManager.SetBaseURL(url); err != nil {
+					log.Warn().Err(err).Msg("Failed to synchronize SAML base URL")
+				}
 			}
 		}
 		// Inject resource store for polling optimization
@@ -4156,6 +4162,11 @@ func (r *Router) capturePublicURLFromRequest(req *http.Request) {
 	if r.monitor != nil {
 		if mgr := r.monitor.GetNotificationManager(); mgr != nil {
 			mgr.SetPublicURL(normalizedCandidate)
+		}
+	}
+	if r.samlManager != nil {
+		if err := r.samlManager.SetBaseURL(normalizedCandidate); err != nil {
+			log.Warn().Err(err).Msg("Failed to synchronize SAML base URL")
 		}
 	}
 }
