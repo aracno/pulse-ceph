@@ -812,7 +812,7 @@ func (s *Service) createProviderForModel(modelStr string) (providers.StreamingPr
 		if baseURL == "" {
 			baseURL = "http://localhost:11434"
 		}
-		return providers.NewOllamaClient(modelName, baseURL, timeout), nil
+		return providers.NewOllamaClient(modelName, baseURL, s.cfg.OllamaUsername, s.cfg.OllamaPassword, timeout), nil
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", providerName)
 	}

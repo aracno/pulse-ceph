@@ -30,6 +30,7 @@ export const aiHelpContent: HelpContent[] = [
       'Connect to a local or remote Ollama instance for Pulse Assistant and Patrol features.\n\n' +
       'Ollama provides easy access to open-source models like Llama, Mistral, and CodeLlama ' +
       'without requiring cloud API keys.\n\n' +
+      'If your Ollama endpoint is behind a reverse proxy, you can also store an optional Basic Auth username and password.\n\n' +
       'Default: http://localhost:11434 (local Ollama installation)',
     examples: [
       'http://localhost:11434 (local)',

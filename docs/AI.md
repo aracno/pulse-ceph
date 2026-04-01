@@ -296,7 +296,7 @@ Configure in the UI: **Settings → System → AI Assistant**
 - **OpenAI**
 - **DeepSeek**
 - **Google Gemini**
-- **Ollama** (self-hosted, with tool/function calling support)
+- **Ollama** (self-hosted, with tool/function calling support and optional Basic Auth for reverse-proxied endpoints)
 - **OpenAI-compatible base URL** (for providers that implement the OpenAI API shape)
 
 ### Models
@@ -328,6 +328,7 @@ Config directory: `/etc/pulse` (systemd) or `/data` (Docker/Kubernetes)
 ### Testing
 
 - Test provider connectivity: `POST /api/ai/test` and `POST /api/ai/test/{provider}`
+- Ollama tests validate both the server endpoint and model availability, not just basic reachability
 - List available models: `GET /api/ai/models`
 
 ---

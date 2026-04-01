@@ -40,6 +40,8 @@ export interface AISettings {
   gemini_configured: boolean; // true if Gemini API key is set
   ollama_configured: boolean; // true (always available for attempt)
   ollama_base_url: string; // Ollama server URL
+  ollama_username?: string; // Optional Basic Auth username for Ollama
+  ollama_password_set?: boolean; // true if an Ollama password is stored
   openai_base_url?: string; // Custom OpenAI base URL
   configured_providers: AIProvider[]; // List of providers with credentials
 
@@ -82,6 +84,8 @@ export interface AISettingsUpdateRequest {
   deepseek_api_key?: string; // Set DeepSeek API key
   gemini_api_key?: string; // Set Gemini API key
   ollama_base_url?: string; // Set Ollama server URL
+  ollama_username?: string; // Set Ollama Basic Auth username
+  ollama_password?: string; // Set Ollama Basic Auth password
   openai_base_url?: string; // Set custom OpenAI base URL
   // Clear flags for removing credentials
   clear_anthropic_key?: boolean; // Clear Anthropic API key
@@ -89,6 +93,8 @@ export interface AISettingsUpdateRequest {
   clear_deepseek_key?: boolean; // Clear DeepSeek API key
   clear_gemini_key?: boolean; // Clear Gemini API key
   clear_ollama_url?: boolean; // Clear Ollama URL
+  clear_ollama_username?: boolean; // Clear Ollama Basic Auth username
+  clear_ollama_password?: boolean; // Clear Ollama Basic Auth password
 
   // Cost controls
   cost_budget_usd_30d?: number;

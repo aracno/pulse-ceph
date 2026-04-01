@@ -739,12 +739,16 @@ func shouldRestartAIChat(req AISettingsUpdateRequest) bool {
 		req.DeepSeekAPIKey != nil ||
 		req.GeminiAPIKey != nil ||
 		req.OllamaBaseURL != nil ||
+		req.OllamaUsername != nil ||
+		req.OllamaPassword != nil ||
 		req.OpenAIBaseURL != nil ||
 		req.ClearAnthropicKey != nil ||
 		req.ClearOpenAIKey != nil ||
 		req.ClearDeepSeekKey != nil ||
 		req.ClearGeminiKey != nil ||
-		req.ClearOllamaURL != nil
+		req.ClearOllamaURL != nil ||
+		req.ClearOllamaUsername != nil ||
+		req.ClearOllamaPassword != nil
 }
 
 // SetOnControlSettingsChange sets a callback to be invoked when control settings change
@@ -1029,6 +1033,8 @@ type AISettingsResponse struct {
 	GeminiConfigured    bool     `json:"gemini_configured"`         // true if Gemini API key is set
 	OllamaConfigured    bool     `json:"ollama_configured"`         // true (always available for attempt)
 	OllamaBaseURL       string   `json:"ollama_base_url"`           // Ollama server URL
+	OllamaUsername      string   `json:"ollama_username,omitempty"` // Optional Basic Auth username for Ollama
+	OllamaPasswordSet   bool     `json:"ollama_password_set"`       // true if an Ollama password is stored
 	OpenAIBaseURL       string   `json:"openai_base_url,omitempty"` // Custom OpenAI base URL
 	ConfiguredProviders []string `json:"configured_providers"`      // List of provider names with credentials
 	// Cost controls
@@ -1069,13 +1075,17 @@ type AISettingsUpdateRequest struct {
 	DeepSeekAPIKey  *string `json:"deepseek_api_key,omitempty"`  // Set DeepSeek API key
 	GeminiAPIKey    *string `json:"gemini_api_key,omitempty"`    // Set Gemini API key
 	OllamaBaseURL   *string `json:"ollama_base_url,omitempty"`   // Set Ollama server URL
+	OllamaUsername  *string `json:"ollama_username,omitempty"`   // Set Ollama Basic Auth username
+	OllamaPassword  *string `json:"ollama_password,omitempty"`   // Set Ollama Basic Auth password
 	OpenAIBaseURL   *string `json:"openai_base_url,omitempty"`   // Set custom OpenAI base URL
 	// Clear flags for removing credentials
-	ClearAnthropicKey *bool `json:"clear_anthropic_key,omitempty"` // Clear Anthropic API key
-	ClearOpenAIKey    *bool `json:"clear_openai_key,omitempty"`    // Clear OpenAI API key
-	ClearDeepSeekKey  *bool `json:"clear_deepseek_key,omitempty"`  // Clear DeepSeek API key
-	ClearGeminiKey    *bool `json:"clear_gemini_key,omitempty"`    // Clear Gemini API key
-	ClearOllamaURL    *bool `json:"clear_ollama_url,omitempty"`    // Clear Ollama URL
+	ClearAnthropicKey   *bool `json:"clear_anthropic_key,omitempty"`   // Clear Anthropic API key
+	ClearOpenAIKey      *bool `json:"clear_openai_key,omitempty"`      // Clear OpenAI API key
+	ClearDeepSeekKey    *bool `json:"clear_deepseek_key,omitempty"`    // Clear DeepSeek API key
+	ClearGeminiKey      *bool `json:"clear_gemini_key,omitempty"`      // Clear Gemini API key
+	ClearOllamaURL      *bool `json:"clear_ollama_url,omitempty"`      // Clear Ollama URL
+	ClearOllamaUsername *bool `json:"clear_ollama_username,omitempty"` // Clear Ollama Basic Auth username
+	ClearOllamaPassword *bool `json:"clear_ollama_password,omitempty"` // Clear Ollama Basic Auth password
 	// Cost controls
 	CostBudgetUSD30d *float64 `json:"cost_budget_usd_30d,omitempty"`
 	// Request timeout (seconds) - for slow hardware running local models
@@ -1146,6 +1156,8 @@ func (h *AISettingsHandler) HandleGetAISettings(w http.ResponseWriter, r *http.R
 		GeminiConfigured:       settings.HasProvider(config.AIProviderGemini),
 		OllamaConfigured:       settings.HasProvider(config.AIProviderOllama),
 		OllamaBaseURL:          settings.GetBaseURLForProvider(config.AIProviderOllama),
+		OllamaUsername:         settings.OllamaUsername,
+		OllamaPasswordSet:      settings.OllamaPassword != "",
 		OpenAIBaseURL:          settings.OpenAIBaseURL,
 		ConfiguredProviders:    settings.GetConfiguredProviders(),
 		CostBudgetUSD30d:       settings.CostBudgetUSD30d,
@@ -1320,6 +1332,16 @@ func (h *AISettingsHandler) HandleUpdateAISettings(w http.ResponseWriter, r *htt
 		settings.OllamaBaseURL = ""
 	} else if req.OllamaBaseURL != nil {
 		settings.OllamaBaseURL = strings.TrimSpace(*req.OllamaBaseURL)
+	}
+	if req.ClearOllamaUsername != nil && *req.ClearOllamaUsername {
+		settings.OllamaUsername = ""
+	} else if req.OllamaUsername != nil {
+		settings.OllamaUsername = strings.TrimSpace(*req.OllamaUsername)
+	}
+	if req.ClearOllamaPassword != nil && *req.ClearOllamaPassword {
+		settings.OllamaPassword = ""
+	} else if req.OllamaPassword != nil {
+		settings.OllamaPassword = *req.OllamaPassword
 	}
 	if req.OpenAIBaseURL != nil {
 		settings.OpenAIBaseURL = strings.TrimSpace(*req.OpenAIBaseURL)
@@ -1563,6 +1585,8 @@ func (h *AISettingsHandler) HandleUpdateAISettings(w http.ResponseWriter, r *htt
 		GeminiConfigured:       settings.HasProvider(config.AIProviderGemini),
 		OllamaConfigured:       settings.HasProvider(config.AIProviderOllama),
 		OllamaBaseURL:          settings.GetBaseURLForProvider(config.AIProviderOllama),
+		OllamaUsername:         settings.OllamaUsername,
+		OllamaPasswordSet:      settings.OllamaPassword != "",
 		OpenAIBaseURL:          settings.OpenAIBaseURL,
 		ConfiguredProviders:    settings.GetConfiguredProviders(),
 		RequestTimeoutSeconds:  settings.RequestTimeoutSeconds,
@@ -1694,8 +1718,10 @@ func (h *AISettingsHandler) HandleTestProvider(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Create provider and test connection
-	testProvider, err := providers.NewForProvider(cfg, provider, cfg.GetModel())
+	// Create provider and test connection using a model that belongs to the
+	// provider being tested, not necessarily the globally selected default model.
+	testModel := cfg.GetPreferredModelForProvider(provider)
+	testProvider, err := providers.NewForProvider(cfg, provider, testModel)
 	if err != nil {
 		testResult.Success = false
 		testResult.Message = fmt.Sprintf("Failed to create provider: %v", err)

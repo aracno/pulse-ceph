@@ -87,6 +87,8 @@ export const AISettings: Component = () => {
   const [setupProvider, setSetupProvider] = createSignal<'anthropic' | 'openai' | 'deepseek' | 'gemini' | 'ollama'>('anthropic');
   const [setupApiKey, setSetupApiKey] = createSignal('');
   const [setupOllamaUrl, setSetupOllamaUrl] = createSignal('http://localhost:11434');
+  const [setupOllamaUsername, setSetupOllamaUsername] = createSignal('');
+  const [setupOllamaPassword, setSetupOllamaPassword] = createSignal('');
   const [setupSaving, setSetupSaving] = createSignal(false);
 
   // UI state for collapsible sections - START COLLAPSED for compact view
@@ -116,6 +118,9 @@ export const AISettings: Component = () => {
     deepseekApiKey: '',
     geminiApiKey: '',
     ollamaBaseUrl: 'http://localhost:11434',
+    ollamaUsername: '',
+    ollamaPassword: '',
+    clearOllamaPassword: false,
     openaiBaseUrl: '',
     // Cost controls
     costBudgetUSD30d: '',
@@ -151,6 +156,9 @@ export const AISettings: Component = () => {
         deepseekApiKey: '',
         geminiApiKey: '',
         ollamaBaseUrl: 'http://localhost:11434',
+        ollamaUsername: '',
+        ollamaPassword: '',
+        clearOllamaPassword: false,
         openaiBaseUrl: '',
         costBudgetUSD30d: '',
         requestTimeoutSeconds: 300,
@@ -182,6 +190,9 @@ export const AISettings: Component = () => {
       deepseekApiKey: '',
       geminiApiKey: '',
       ollamaBaseUrl: data.ollama_base_url || 'http://localhost:11434',
+      ollamaUsername: data.ollama_username || '',
+      ollamaPassword: '',
+      clearOllamaPassword: false,
       openaiBaseUrl: data.openai_base_url || '',
       costBudgetUSD30d:
         typeof data.cost_budget_usd_30d === 'number' && data.cost_budget_usd_30d > 0
@@ -509,6 +520,14 @@ export const AISettings: Component = () => {
       if (form.ollamaBaseUrl.trim() && form.ollamaBaseUrl.trim() !== (settings()?.ollama_base_url || '')) {
         payload.ollama_base_url = form.ollamaBaseUrl.trim();
       }
+      if (form.ollamaUsername.trim() !== (settings()?.ollama_username || '')) {
+        payload.ollama_username = form.ollamaUsername.trim();
+      }
+      if (form.ollamaPassword !== '') {
+        payload.ollama_password = form.ollamaPassword;
+      } else if (form.clearOllamaPassword) {
+        payload.clear_ollama_password = true;
+      }
       if (form.openaiBaseUrl !== (settings()?.openai_base_url || '')) {
         payload.openai_base_url = form.openaiBaseUrl.trim();
       }
@@ -642,7 +661,11 @@ export const AISettings: Component = () => {
       if (provider === 'openai') clearPayload.clear_openai_key = true;
       if (provider === 'deepseek') clearPayload.clear_deepseek_key = true;
       if (provider === 'gemini') clearPayload.clear_gemini_key = true;
-      if (provider === 'ollama') clearPayload.clear_ollama_url = true;
+      if (provider === 'ollama') {
+        clearPayload.clear_ollama_url = true;
+        clearPayload.clear_ollama_username = true;
+        clearPayload.clear_ollama_password = true;
+      }
 
       await AIAPI.updateSettings(clearPayload);
 
@@ -655,7 +678,12 @@ export const AISettings: Component = () => {
       if (provider === 'openai') setForm('openaiApiKey', '');
       if (provider === 'deepseek') setForm('deepseekApiKey', '');
       if (provider === 'gemini') setForm('geminiApiKey', '');
-      if (provider === 'ollama') setForm('ollamaBaseUrl', '');
+      if (provider === 'ollama') {
+        setForm('ollamaBaseUrl', '');
+        setForm('ollamaUsername', '');
+        setForm('ollamaPassword', '');
+        setForm('clearOllamaPassword', false);
+      }
 
       notificationStore.success(`${provider} credentials cleared`);
       // Notify other components (like AIChat) that settings changed
@@ -697,7 +725,13 @@ export const AISettings: Component = () => {
         action={
           (() => {
             const s = settings();
-            const hasConfiguredProvider = s && (s.anthropic_configured || s.openai_configured || s.deepseek_configured || s.ollama_configured);
+            const hasConfiguredProvider = s && (
+              s.anthropic_configured ||
+              s.openai_configured ||
+              s.deepseek_configured ||
+              s.gemini_configured ||
+              s.ollama_configured
+            );
 
             return (
               <Toggle
@@ -1293,10 +1327,66 @@ export const AISettings: Component = () => {
                             disabled={saving()}
                           />
                         </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          <div class="space-y-1">
+                            <label class="text-xs text-gray-600 dark:text-gray-400">
+                              Username
+                            </label>
+                            <input
+                              type="text"
+                              value={form.ollamaUsername}
+                              onInput={(e) => setForm('ollamaUsername', e.currentTarget.value)}
+                              placeholder="Optional"
+                              class={controlClass()}
+                              disabled={saving()}
+                            />
+                          </div>
+                          <div class="space-y-1">
+                            <div class="flex items-center justify-between gap-2">
+                              <label class="text-xs text-gray-600 dark:text-gray-400">
+                                Password
+                              </label>
+                              <Show when={settings()?.ollama_password_set && !form.clearOllamaPassword}>
+                                <button
+                                  type="button"
+                                  class="text-[11px] text-orange-600 dark:text-orange-400 hover:underline"
+                                  onClick={() => {
+                                    setForm('ollamaPassword', '');
+                                    setForm('clearOllamaPassword', true);
+                                  }}
+                                  disabled={saving()}
+                                >
+                                  Clear saved password
+                                </button>
+                              </Show>
+                            </div>
+                            <input
+                              type="password"
+                              value={form.ollamaPassword}
+                              onInput={(e) => {
+                                setForm('ollamaPassword', e.currentTarget.value);
+                                if (form.clearOllamaPassword) setForm('clearOllamaPassword', false);
+                              }}
+                              placeholder={settings()?.ollama_password_set && !form.clearOllamaPassword ? 'Saved password' : 'Optional'}
+                              class={controlClass()}
+                              disabled={saving()}
+                            />
+                            <Show when={settings()?.ollama_password_set && !form.ollamaPassword && !form.clearOllamaPassword}>
+                              <p class="text-[11px] text-gray-500">
+                                A password is currently stored.
+                              </p>
+                            </Show>
+                            <Show when={form.clearOllamaPassword}>
+                              <p class="text-[11px] text-orange-600 dark:text-orange-400">
+                                Saved password will be cleared on save.
+                              </p>
+                            </Show>
+                          </div>
+                        </div>
                         <div class="flex items-center justify-between">
                           <p class="text-xs text-gray-500">
                             <a href="https://ollama.ai" target="_blank" rel="noopener" class="text-blue-600 dark:text-blue-400 hover:underline">Learn about Ollama →</a>
-                            <span class="text-gray-400"> · Free & local</span>
+                            <span class="text-gray-400"> · Optional Basic Auth for Ollama behind a reverse proxy</span>
                           </p>
                           <Show when={settings()?.ollama_configured}>
                             <div class="flex gap-1">
@@ -1884,8 +1974,34 @@ export const AISettings: Component = () => {
                     placeholder="http://localhost:11434"
                     class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                   />
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                        Username
+                      </label>
+                      <input
+                        type="text"
+                        value={setupOllamaUsername()}
+                        onInput={(e) => setSetupOllamaUsername(e.currentTarget.value)}
+                        placeholder="Optional"
+                        class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                        Password
+                      </label>
+                      <input
+                        type="password"
+                        value={setupOllamaPassword()}
+                        onInput={(e) => setSetupOllamaPassword(e.currentTarget.value)}
+                        placeholder="Optional"
+                        class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                      />
+                    </div>
+                  </div>
                   <p class="text-xs text-gray-500 mt-1.5">
-                    Ollama runs locally - no API key needed
+                    Ollama runs locally by default. Use username/password only if your endpoint is behind Basic Auth.
                   </p>
                 </div>
               </Show>
@@ -1898,6 +2014,8 @@ export const AISettings: Component = () => {
                 onClick={() => {
                   setShowSetupModal(false);
                   setSetupApiKey('');
+                  setSetupOllamaUsername('');
+                  setSetupOllamaPassword('');
                 }}
                 class="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
                 disabled={setupSaving()}
@@ -1945,6 +2063,12 @@ export const AISettings: Component = () => {
                         return;
                       }
                       payload.ollama_base_url = setupOllamaUrl().trim();
+                      if (setupOllamaUsername().trim()) {
+                        payload.ollama_username = setupOllamaUsername().trim();
+                      }
+                      if (setupOllamaPassword() !== '') {
+                        payload.ollama_password = setupOllamaPassword();
+                      }
                       payload.model = 'ollama:llama3.2:latest';
                     }
 
@@ -1954,6 +2078,8 @@ export const AISettings: Component = () => {
                     resetForm(updated);
                     setShowSetupModal(false);
                     setSetupApiKey('');
+                    setSetupOllamaUsername('');
+                    setSetupOllamaPassword('');
                     notificationStore.success('Pulse Assistant enabled! You can customize settings below.');
                     // Load models after setup
                     loadModels();
