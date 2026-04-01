@@ -2084,7 +2084,7 @@ func (m *Monitor) pollPVENode(
 	connectionHealthStr string,
 	prevNodeMemory map[string]models.Memory,
 	prevInstanceNodes []models.Node,
-) (models.Node, string, error) {
+) (models.Node, string, string, error) {
 	nodeStart := time.Now()
 	displayName := getNodeDisplayName(instanceCfg, node.Node)
 	connectionHost := instanceCfg.Host
@@ -2169,7 +2169,8 @@ func (m *Monitor) pollPVENode(
 		ClusterName:                  instanceCfg.ClusterName,
 		TemperatureMonitoringEnabled: instanceCfg.TemperatureMonitoringEnabled,
 	}
-	modelNode.Disk, _ = m.resolveNodeDisk(instanceName, nodeID, node.Node, node, nil)
+	var nodeDiskSource string
+	modelNode.Disk, nodeDiskSource = m.resolveNodeDisk(instanceName, nodeID, node.Node, node, nil)
 
 	nodeSnapshotRaw := NodeMemoryRaw{
 		Total:               node.MaxMem,
@@ -2254,6 +2255,7 @@ func (m *Monitor) pollPVENode(
 
 			if resolvedDisk, diskSource := m.resolveNodeDisk(instanceName, nodeID, node.Node, node, nodeInfo); diskSource != "" {
 				modelNode.Disk = resolvedDisk
+				nodeDiskSource = diskSource
 			} else {
 				log.Warn().
 					Str("node", node.Node).
@@ -2807,7 +2809,7 @@ func (m *Monitor) pollPVENode(
 		})
 	}
 
-	return modelNode, effectiveStatus, nil
+	return modelNode, effectiveStatus, nodeDiskSource, nil
 }
 
 func parseClusterStorageNodes(raw string) []string {

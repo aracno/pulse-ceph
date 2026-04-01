@@ -6844,10 +6844,12 @@ func (m *Monitor) pollPVEInstance(ctx context.Context, instanceName string, clie
 	// Convert to models
 	var modelNodes []models.Node
 	nodeEffectiveStatus := make(map[string]string) // Track effective status (with grace period) for each node
+	nodeDiskSources := make(map[string]string)
 	// Parallel node polling
 	type nodePollResult struct {
 		node            models.Node
 		effectiveStatus string
+		diskSource      string
 	}
 
 	resultChan := make(chan nodePollResult, len(nodes))
@@ -6865,11 +6867,12 @@ func (m *Monitor) pollPVEInstance(ctx context.Context, instanceName string, clie
 		go func(node proxmox.Node) {
 			defer wg.Done()
 
-			modelNode, effectiveStatus, _ := m.pollPVENode(ctx, instanceName, instanceCfg, client, node, connectionHealthStr, prevNodeMemory, prevInstanceNodes)
+			modelNode, effectiveStatus, diskSource, _ := m.pollPVENode(ctx, instanceName, instanceCfg, client, node, connectionHealthStr, prevNodeMemory, prevInstanceNodes)
 
 			resultChan <- nodePollResult{
 				node:            modelNode,
 				effectiveStatus: effectiveStatus,
+				diskSource:      diskSource,
 			}
 		}(node)
 	}
@@ -6880,6 +6883,7 @@ func (m *Monitor) pollPVEInstance(ctx context.Context, instanceName string, clie
 	for res := range resultChan {
 		modelNodes = append(modelNodes, res.node)
 		nodeEffectiveStatus[res.node.Name] = res.effectiveStatus
+		nodeDiskSources[res.node.Name] = res.diskSource
 	}
 
 	if len(modelNodes) == 0 && len(prevInstanceNodes) > 0 {
@@ -6927,7 +6931,8 @@ func (m *Monitor) pollPVEInstance(ctx context.Context, instanceName string, clie
 	// Update state first so we have nodes available
 	m.state.UpdateNodesForInstance(instanceName, modelNodes)
 
-	// Storage fallback is used to provide disk metrics when rootfs is not available.
+	// Storage fallback is used to provide disk metrics when the node summary only
+	// has the low-confidence /nodes figure or no disk truth at all.
 	// We run this asynchronously with a short timeout so it doesn't block VM/container polling.
 	// This addresses the issue where slow storage APIs (e.g., NFS mounts) can cause the entire
 	// polling task to timeout before reaching VM/container polling.
@@ -6976,7 +6981,9 @@ func (m *Monitor) pollPVEInstance(ctx context.Context, instanceName string, clie
 					continue
 				}
 
-				// Look for local or local-lvm storage as most stable disk metric
+				bestRank := 0
+				bestFound := false
+				var bestStorage proxmox.Storage
 				for _, storage := range nodeStorages {
 					if reason, skip := readOnlyFilesystemReason(storage.Type, storage.Total, storage.Used); skip {
 						log.Debug().
@@ -6989,25 +6996,35 @@ func (m *Monitor) pollPVEInstance(ctx context.Context, instanceName string, clie
 							Msg("Skipping read-only storage while building disk fallback")
 						continue
 					}
-					if storage.Storage == "local" || storage.Storage == "local-lvm" {
-						disk := models.Disk{
-							Total: int64(storage.Total),
-							Used:  int64(storage.Used),
-							Free:  int64(storage.Available),
-							Usage: safePercentage(float64(storage.Used), float64(storage.Total)),
-						}
-						// Prefer "local" over "local-lvm"
-						storageByNodeMu.Lock()
-						if _, exists := storageByNode[node.Node]; !exists || storage.Storage == "local" {
-							storageByNode[node.Node] = disk
-							log.Debug().
-								Str("node", node.Node).
-								Str("storage", storage.Storage).
-								Float64("usage", disk.Usage).
-								Msg("Using storage for disk metrics fallback")
-						}
-						storageByNodeMu.Unlock()
+
+					rank, ok := preferredNodeDiskFallbackRank(storage)
+					if !ok {
+						continue
 					}
+					if !bestFound || rank < bestRank || (rank == bestRank && storage.Total > bestStorage.Total) {
+						bestRank = rank
+						bestStorage = storage
+						bestFound = true
+					}
+				}
+
+				if bestFound {
+					disk := models.Disk{
+						Total: int64(bestStorage.Total),
+						Used:  int64(bestStorage.Used),
+						Free:  int64(bestStorage.Available),
+						Usage: safePercentage(float64(bestStorage.Used), float64(bestStorage.Total)),
+					}
+					storageByNodeMu.Lock()
+					storageByNode[node.Node] = disk
+					storageByNodeMu.Unlock()
+					log.Debug().
+						Str("node", node.Node).
+						Str("storage", bestStorage.Storage).
+						Str("type", bestStorage.Type).
+						Int("rank", bestRank).
+						Float64("usage", disk.Usage).
+						Msg("Using preferred storage for disk metrics fallback")
 				}
 			}
 		}()
@@ -7281,7 +7298,8 @@ func (m *Monitor) pollPVEInstance(ctx context.Context, instanceName string, clie
 			Msg("Storage fallback still running - proceeding without waiting (disk fallback may be unavailable)")
 	}
 
-	// Update nodes with storage fallback if rootfs was not available
+	// Update nodes with storage fallback if the current disk source is the
+	// low-confidence /nodes endpoint, or if no disk source was available.
 	// Copy storageByNode under lock, then release to avoid holding during metric updates
 	storageByNodeMu.Lock()
 	localStorageByNode := make(map[string]models.Disk, len(storageByNode))
@@ -7291,14 +7309,15 @@ func (m *Monitor) pollPVEInstance(ctx context.Context, instanceName string, clie
 	storageByNodeMu.Unlock()
 
 	for i := range modelNodes {
-		if modelNodes[i].Disk.Total == 0 {
-			if disk, exists := localStorageByNode[modelNodes[i].Name]; exists {
-				modelNodes[i].Disk = disk
-				log.Debug().
-					Str("node", modelNodes[i].Name).
-					Float64("usage", disk.Usage).
-					Msg("Applied storage fallback for disk metrics")
-			}
+		currentDiskSource := nodeDiskSources[modelNodes[i].Name]
+		if disk, exists := localStorageByNode[modelNodes[i].Name]; exists &&
+			(modelNodes[i].Disk.Total == 0 || currentDiskSource == "" || currentDiskSource == "nodes-endpoint") {
+			modelNodes[i].Disk = disk
+			log.Debug().
+				Str("node", modelNodes[i].Name).
+				Str("previousSource", currentDiskSource).
+				Float64("usage", disk.Usage).
+				Msg("Applied storage fallback for disk metrics")
 		}
 
 		if modelNodes[i].Status == "online" {
