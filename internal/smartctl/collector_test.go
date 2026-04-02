@@ -549,6 +549,40 @@ Current Temperature:                    39 C
 	}
 }
 
+func TestParseSMARTOutputFallsBackToCurrentDriveTemperatureText(t *testing.T) {
+	payload := smartctlJSON{
+		ModelName:    "SEAGATE EXOS",
+		SerialNumber: "SG-123",
+	}
+	payload.Device.Protocol = "SCSI"
+	payload.SmartStatus = &struct {
+		Passed bool `json:"passed"`
+	}{Passed: true}
+	payload.Smartctl.Output = []string{
+		"=== START OF INFORMATION SECTION ===",
+		"Current Drive Temperature: 35 C",
+	}
+
+	out, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	result, err := parseSMARTOutput(out, smartctlTarget{Path: "/dev/da0"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected result")
+	}
+	if result.Temperature != 35 {
+		t.Fatalf("expected current drive temperature 35, got %#v", result)
+	}
+	if result.Model != "SEAGATE EXOS" || result.Serial != "SG-123" || result.Health != "PASSED" {
+		t.Fatalf("expected model/serial/health to be preserved, got %#v", result)
+	}
+}
+
 func TestParseRawValue(t *testing.T) {
 	tests := []struct {
 		name     string

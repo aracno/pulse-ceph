@@ -68,39 +68,208 @@ func NormalizeVersion(version string) string {
 //
 // -1 if a < b (b is newer)
 //
-// Handles versions like "4.33.1", "v4.33.1", "4.33" gracefully.
+// Handles versions like "4.33.1", "v4.33.1", "4.33", and semver prereleases
+// like "5.1.26-rc.2" gracefully.
 func CompareVersions(a, b string) int {
-	// Normalize both versions
-	a = NormalizeVersion(a)
-	b = NormalizeVersion(b)
+	coreA, prereleaseA := splitVersionForComparison(a)
+	coreB, prereleaseB := splitVersionForComparison(b)
 
-	// Split into parts
-	partsA := strings.Split(a, ".")
-	partsB := strings.Split(b, ".")
-
-	// Compare each part numerically
-	maxLen := len(partsA)
-	if len(partsB) > maxLen {
-		maxLen = len(partsB)
+	maxLen := len(coreA)
+	if len(coreB) > maxLen {
+		maxLen = len(coreB)
 	}
 
 	for i := 0; i < maxLen; i++ {
-		var numA, numB int
-
-		if i < len(partsA) {
-			fmt.Sscanf(partsA[i], "%d", &numA)
-		}
-		if i < len(partsB) {
-			fmt.Sscanf(partsB[i], "%d", &numB)
-		}
-
-		if numA > numB {
+		partA := versionPartAt(coreA, i)
+		partB := versionPartAt(coreB, i)
+		if partA > partB {
 			return 1
 		}
-		if numA < numB {
+		if partA < partB {
 			return -1
 		}
 	}
 
-	return 0
+	return compareVersionPrerelease(prereleaseA, prereleaseB)
+}
+
+func splitVersionForComparison(version string) ([]int, []string) {
+	normalized := NormalizeVersion(version)
+	prerelease := ""
+	if idx := strings.Index(normalized, "-"); idx != -1 {
+		prerelease = normalized[idx+1:]
+		normalized = normalized[:idx]
+	}
+
+	parts := strings.Split(normalized, ".")
+	core := make([]int, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			core = append(core, 0)
+			continue
+		}
+
+		value := 0
+		fmt.Sscanf(part, "%d", &value)
+		core = append(core, value)
+	}
+
+	if prerelease == "" {
+		return core, nil
+	}
+	return core, strings.Split(prerelease, ".")
+}
+
+func versionPartAt(parts []int, idx int) int {
+	if idx >= len(parts) {
+		return 0
+	}
+	return parts[idx]
+}
+
+func compareVersionPrerelease(a, b []string) int {
+	switch {
+	case len(a) == 0 && len(b) == 0:
+		return 0
+	case len(a) == 0:
+		return 1
+	case len(b) == 0:
+		return -1
+	}
+
+	limit := len(a)
+	if len(b) < limit {
+		limit = len(b)
+	}
+
+	for i := 0; i < limit; i++ {
+		if cmp := compareVersionIdentifier(a[i], b[i]); cmp != 0 {
+			return cmp
+		}
+	}
+
+	switch {
+	case len(a) > len(b):
+		return 1
+	case len(a) < len(b):
+		return -1
+	default:
+		return 0
+	}
+}
+
+func compareVersionIdentifier(a, b string) int {
+	if a == b {
+		return 0
+	}
+
+	aNumeric := isNumericVersionIdentifier(a)
+	bNumeric := isNumericVersionIdentifier(b)
+	switch {
+	case aNumeric && bNumeric:
+		return compareNumericIdentifier(a, b)
+	case aNumeric:
+		return -1
+	case bNumeric:
+		return 1
+	default:
+		return compareVersionChunks(a, b)
+	}
+}
+
+func isNumericVersionIdentifier(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func compareNumericIdentifier(a, b string) int {
+	a = strings.TrimLeft(a, "0")
+	b = strings.TrimLeft(b, "0")
+	if a == "" {
+		a = "0"
+	}
+	if b == "" {
+		b = "0"
+	}
+
+	switch {
+	case len(a) > len(b):
+		return 1
+	case len(a) < len(b):
+		return -1
+	case a > b:
+		return 1
+	case a < b:
+		return -1
+	default:
+		return 0
+	}
+}
+
+func compareVersionChunks(a, b string) int {
+	for a != "" && b != "" {
+		aChunk, aNumeric, nextA := nextVersionChunk(a)
+		bChunk, bNumeric, nextB := nextVersionChunk(b)
+
+		var cmp int
+		switch {
+		case aNumeric && bNumeric:
+			cmp = compareNumericIdentifier(aChunk, bChunk)
+		case aNumeric != bNumeric:
+			cmp = strings.Compare(aChunk, bChunk)
+		default:
+			cmp = strings.Compare(aChunk, bChunk)
+		}
+		if cmp != 0 {
+			return normalizeCompareResult(cmp)
+		}
+
+		a = nextA
+		b = nextB
+	}
+
+	switch {
+	case a == "" && b == "":
+		return 0
+	case a == "":
+		return -1
+	default:
+		return 1
+	}
+}
+
+func nextVersionChunk(value string) (chunk string, numeric bool, rest string) {
+	if value == "" {
+		return "", false, ""
+	}
+
+	numeric = value[0] >= '0' && value[0] <= '9'
+	end := 1
+	for end < len(value) {
+		isDigit := value[end] >= '0' && value[end] <= '9'
+		if isDigit != numeric {
+			break
+		}
+		end++
+	}
+
+	return value[:end], numeric, value[end:]
+}
+
+func normalizeCompareResult(cmp int) int {
+	switch {
+	case cmp > 0:
+		return 1
+	case cmp < 0:
+		return -1
+	default:
+		return 0
+	}
 }
