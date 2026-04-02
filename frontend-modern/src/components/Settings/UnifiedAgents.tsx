@@ -22,6 +22,8 @@ import { getPulseBaseUrl } from '@/utils/url';
 import { logger } from '@/utils/logger';
 
 const TOKEN_PLACEHOLDER = '<api-token>';
+const UNIFIED_AGENT_GUIDE_URL =
+    'https://github.com/rcourtman/Pulse/blob/main/docs/UNIFIED_AGENT.md#where-to-install-the-agent';
 
 const buildDefaultTokenName = () => {
     const now = new Date();
@@ -1003,6 +1005,42 @@ export const UnifiedAgents: Component = () => {
                                 Prefer API-only? Use manual setup →
                             </button>
                         </div>
+                    </div>
+                </div>
+
+                <div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-100">
+                    <div class="space-y-3">
+                        <div class="space-y-1">
+                            <h4 class="text-sm font-semibold">Where should I install the agent?</h4>
+                            <p class="text-xs text-blue-800 dark:text-blue-200">
+                                Install it where you need visibility inside the machine itself, not on every guest by default.
+                            </p>
+                        </div>
+                        <ul class="space-y-2 text-xs text-blue-900 dark:text-blue-100">
+                            <li>
+                                <span class="font-semibold">Proxmox hosts:</span> usually yes. This is the highest-value placement for temperatures, S.M.A.R.T., RAID, and direct host telemetry.
+                            </li>
+                            <li>
+                                <span class="font-semibold">Plain LXCs:</span> usually no. Proxmox already exposes their CPU, memory, and filesystem usage, so an extra agent is often redundant.
+                            </li>
+                            <li>
+                                <span class="font-semibold">VMs:</span> install when you need in-guest visibility, or when the VM runs Docker, Podman, or Kubernetes. If <code>qemu-guest-agent</code> is installed, Proxmox already covers many VM basics.
+                            </li>
+                            <li>
+                                <span class="font-semibold">Docker, Podman, or Kubernetes hosts:</span> install on the machine that actually owns those workloads when you want container-level or cluster-level visibility.
+                            </li>
+                        </ul>
+                        <p class="text-xs text-blue-800 dark:text-blue-200">
+                            Rule of thumb: install on Proxmox hosts for hardware telemetry, then add guest installs only when you need to see what runs inside that guest.
+                            <a
+                                href={UNIFIED_AGENT_GUIDE_URL}
+                                target="_blank"
+                                rel="noreferrer"
+                                class="ml-1 font-medium underline hover:no-underline"
+                            >
+                                Read the full placement guide
+                            </a>
+                        </p>
                     </div>
                 </div>
 

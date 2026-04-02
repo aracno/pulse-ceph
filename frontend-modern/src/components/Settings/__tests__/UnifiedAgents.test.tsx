@@ -197,6 +197,23 @@ afterEach(() => {
 });
 
 describe('UnifiedAgents token generation', () => {
+  it('shows placement guidance next to the install workflow', async () => {
+    setupComponent();
+
+    await waitFor(() => {
+      expect(screen.getByText('Where should I install the agent?')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Proxmox hosts:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Plain LXCs:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Docker, Podman, or Kubernetes hosts:/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: /Read the full placement guide/i }),
+    ).toHaveAttribute(
+      'href',
+      'https://github.com/rcourtman/Pulse/blob/main/docs/UNIFIED_AGENT.md#where-to-install-the-agent',
+    );
+  });
+
   it('renders the token generation UI when auth is required', async () => {
     setupComponent();
 
