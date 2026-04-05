@@ -14,7 +14,7 @@ curl -fsSL https://github.com/rcourtman/Pulse/releases/latest/download/install.s
 ```
 
 > **Note**: The GitHub `install.sh` is the **server** installer. The agent installer is served from your Pulse server at `/install.sh` (see **Settings → Agents → Installation commands**).
-> **Fallback**: If GitHub downloads are slow or blocked, download the matching Pulse release tarball onto the Proxmox host first and run `bash install.sh --archive /path/to/pulse-vX.Y.Z-linux-amd64.tar.gz`. The installer will push that archive into the LXC instead of making the container fetch it directly.
+> **Fallback**: If GitHub downloads are slow or blocked, download the Pulse release tarball for the matching target architecture onto the Proxmox host first and run `bash install.sh --archive /path/to/pulse-vX.Y.Z-linux-amd64.tar.gz`. The installer will push that archive into the LXC instead of making the container fetch it directly.
 
 ### Docker
 Ideal for containerized environments or testing.

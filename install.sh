@@ -2095,19 +2095,135 @@ detect_pulse_architecture() {
     local raw_arch="${1:-$(uname -m)}"
 
     case $raw_arch in
-        x86_64)
+        x86_64|amd64)
             printf 'amd64\n'
             ;;
-        aarch64)
+        aarch64|arm64)
             printf 'arm64\n'
             ;;
-        armv7l)
+        armv7l|armv7)
             printf 'armv7\n'
             ;;
         *)
             return 1
             ;;
     esac
+}
+
+find_pulse_binary_in_dir() {
+    local dir="$1"
+
+    if [[ -f "$dir/bin/pulse" ]]; then
+        printf '%s\n' "$dir/bin/pulse"
+        return 0
+    fi
+    if [[ -f "$dir/pulse" ]]; then
+        printf '%s\n' "$dir/pulse"
+        return 0
+    fi
+
+    return 1
+}
+
+detect_pulse_binary_architecture() {
+    local binary_path="$1"
+    local file_info=""
+    local machine=""
+    local machine_id=""
+
+    if [[ ! -f "$binary_path" ]]; then
+        return 1
+    fi
+
+    if command -v readelf >/dev/null 2>&1; then
+        machine=$(LC_ALL=C readelf -h "$binary_path" 2>/dev/null | awk -F: '/Machine:/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}')
+        case "$machine" in
+            "Advanced Micro Devices X86-64")
+                printf 'amd64\n'
+                return 0
+                ;;
+            "AArch64")
+                printf 'arm64\n'
+                return 0
+                ;;
+            "ARM")
+                printf 'armv7\n'
+                return 0
+                ;;
+        esac
+    fi
+
+    if command -v file >/dev/null 2>&1; then
+        file_info=$(LC_ALL=C file -b "$binary_path" 2>/dev/null || true)
+        case "$file_info" in
+            *"x86-64"*)
+                printf 'amd64\n'
+                return 0
+                ;;
+            *"aarch64"*|*"ARM64"*)
+                printf 'arm64\n'
+                return 0
+                ;;
+            *" ARM "*|ARM,*|*" EABI5"*)
+                printf 'armv7\n'
+                return 0
+                ;;
+        esac
+    fi
+
+    machine_id=$(dd if="$binary_path" bs=1 skip=18 count=2 2>/dev/null | od -An -tu2 2>/dev/null | tr -d '[:space:]')
+    case "$machine_id" in
+        62)
+            printf 'amd64\n'
+            return 0
+            ;;
+        183)
+            printf 'arm64\n'
+            return 0
+            ;;
+        40)
+            printf 'armv7\n'
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+validate_pulse_binary_architecture() {
+    local binary_path="$1"
+    local target_arch="$2"
+    local archive_label="${3:-archive}"
+    local binary_arch=""
+
+    if [[ -z "$target_arch" ]]; then
+        print_error "Target architecture is required for archive validation"
+        return 1
+    fi
+
+    binary_arch=$(detect_pulse_binary_architecture "$binary_path" 2>/dev/null || true)
+    if [[ -z "$binary_arch" ]]; then
+        print_error "Could not determine Pulse binary architecture from $archive_label"
+        print_info "Use an official Pulse Linux release tarball for this machine."
+        return 1
+    fi
+
+    if [[ "$binary_arch" != "$target_arch" ]]; then
+        print_error "Archive architecture mismatch: $archive_label contains $binary_arch but this target requires $target_arch"
+        print_info "Download the official Pulse release tarball for the target architecture."
+        return 1
+    fi
+
+    return 0
+}
+
+create_temp_archive_path() {
+    local prefix="$1"
+    local temp_base=""
+
+    temp_base=$(mktemp "${prefix}-XXXXXX") || return 1
+    rm -f "$temp_base"
+    printf '%s.tar.gz\n' "$temp_base"
 }
 
 resolve_target_release() {
@@ -2252,6 +2368,8 @@ install_pulse_archive() {
     local temp_extract=""
     local temp_extract2=""
     local installed_version=""
+    local pulse_binary_path=""
+    local target_arch=""
 
     if [[ ! -f "$archive_path" ]]; then
         print_error "Archive not found: $archive_path"
@@ -2269,28 +2387,33 @@ install_pulse_archive() {
         return 1
     fi
 
+    pulse_binary_path=$(find_pulse_binary_in_dir "$temp_extract" 2>/dev/null || true)
+    if [[ -z "$pulse_binary_path" ]]; then
+        print_error "Pulse binary not found in archive"
+        rm -rf "$temp_extract"
+        return 1
+    fi
+
+    target_arch=$(detect_pulse_architecture 2>/dev/null || true)
+    if [[ -z "$target_arch" ]]; then
+        print_error "Unsupported architecture for archive install: $(uname -m)"
+        rm -rf "$temp_extract"
+        return 1
+    fi
+
+    if ! validate_pulse_binary_architecture "$pulse_binary_path" "$target_arch" "$(basename "$archive_path")"; then
+        rm -rf "$temp_extract"
+        return 1
+    fi
+
     mkdir -p "$INSTALL_DIR/bin"
 
     if [[ -f "$INSTALL_DIR/bin/pulse" ]]; then
         mv "$INSTALL_DIR/bin/pulse" "$INSTALL_DIR/bin/pulse.old" 2>/dev/null || true
     fi
 
-    if [[ -f "$temp_extract/bin/pulse" ]]; then
-        if ! cp "$temp_extract/bin/pulse" "$INSTALL_DIR/bin/pulse"; then
-            print_error "Failed to copy new binary to $INSTALL_DIR/bin/pulse"
-            [[ -f "$INSTALL_DIR/bin/pulse.old" ]] && mv "$INSTALL_DIR/bin/pulse.old" "$INSTALL_DIR/bin/pulse"
-            rm -rf "$temp_extract"
-            return 1
-        fi
-    elif [[ -f "$temp_extract/pulse" ]]; then
-        if ! cp "$temp_extract/pulse" "$INSTALL_DIR/bin/pulse"; then
-            print_error "Failed to copy new binary to $INSTALL_DIR/bin/pulse"
-            [[ -f "$INSTALL_DIR/bin/pulse.old" ]] && mv "$INSTALL_DIR/bin/pulse.old" "$INSTALL_DIR/bin/pulse"
-            rm -rf "$temp_extract"
-            return 1
-        fi
-    else
-        print_error "Pulse binary not found in archive"
+    if ! cp "$pulse_binary_path" "$INSTALL_DIR/bin/pulse"; then
+        print_error "Failed to copy new binary to $INSTALL_DIR/bin/pulse"
         [[ -f "$INSTALL_DIR/bin/pulse.old" ]] && mv "$INSTALL_DIR/bin/pulse.old" "$INSTALL_DIR/bin/pulse"
         rm -rf "$temp_extract"
         return 1
@@ -2349,10 +2472,9 @@ install_pulse_archive() {
         if ! tar -xzf "$archive_path" -C "$temp_extract2"; then
             print_warn "Failed to re-extract archive for version verification retry"
         else
-            if [[ -f "$temp_extract2/bin/pulse" ]]; then
-                cp -f "$temp_extract2/bin/pulse" "$INSTALL_DIR/bin/pulse"
-            elif [[ -f "$temp_extract2/pulse" ]]; then
-                cp -f "$temp_extract2/pulse" "$INSTALL_DIR/bin/pulse"
+            pulse_binary_path=$(find_pulse_binary_in_dir "$temp_extract2" 2>/dev/null || true)
+            if [[ -n "$pulse_binary_path" ]]; then
+                cp -f "$pulse_binary_path" "$INSTALL_DIR/bin/pulse"
             fi
 
             if [[ -f "$temp_extract2/bin/pulse-docker-agent" ]]; then
@@ -2449,7 +2571,10 @@ download_pulse() {
             }
             print_info "Detected architecture: $raw_arch ($pulse_arch)"
 
-            archive_path=$(mktemp "/tmp/pulse-${LATEST_RELEASE}-${pulse_arch}-XXXXXX.tar.gz")
+            archive_path=$(create_temp_archive_path "/tmp/pulse-${LATEST_RELEASE}-${pulse_arch}") || {
+                print_error "Failed to create temporary archive path"
+                exit 1
+            }
             archive_from_temp=true
             if ! download_release_archive "$LATEST_RELEASE" "$pulse_arch" "$archive_path"; then
                 rm -f "$archive_path"
@@ -2488,7 +2613,10 @@ prefetch_pulse_archive_for_container() {
     print_info "Prefetching Pulse release archive on Proxmox host..."
     print_info "Detected architecture: $raw_arch ($pulse_arch)"
 
-    archive_path=$(mktemp "/tmp/pulse-${LATEST_RELEASE}-${pulse_arch}-lxc-XXXXXX.tar.gz")
+    archive_path=$(create_temp_archive_path "/tmp/pulse-${LATEST_RELEASE}-${pulse_arch}-lxc") || {
+        print_error "Failed to create temporary archive path"
+        return 1
+    }
     if ! download_release_archive "$LATEST_RELEASE" "$pulse_arch" "$archive_path"; then
         rm -f "$archive_path"
         return 1
