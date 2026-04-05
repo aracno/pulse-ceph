@@ -105,6 +105,26 @@ func TestMergeNVMeTempsIntoDisks(t *testing.T) {
 			},
 		},
 		{
+			name: "SMART temperature matched by typed device label",
+			disks: []models.PhysicalDisk{
+				{Node: "node1", DevPath: "/dev/sdd", Temperature: 0},
+			},
+			nodes: []models.Node{
+				{
+					Name: "node1",
+					Temperature: &models.Temperature{
+						Available: true,
+						SMART: []models.DiskTemp{
+							{Device: "sdd [scsi]", Temperature: 39},
+						},
+					},
+				},
+			},
+			expected: []models.PhysicalDisk{
+				{Node: "node1", DevPath: "/dev/sdd", Temperature: 39},
+			},
+		},
+		{
 			name: "NVMe legacy fallback when no SMART match",
 			disks: []models.PhysicalDisk{
 				{Node: "node1", DevPath: "/dev/nvme0n1", Type: "nvme", Temperature: 0},
@@ -329,5 +349,36 @@ func TestMergeNVMeTempsIntoDisks_OriginalSliceUnchanged(t *testing.T) {
 
 	if original[0].Temperature != 0 {
 		t.Errorf("original disk temperature was modified: got %d, want 0", original[0].Temperature)
+	}
+}
+
+func TestMergeHostAgentSMARTIntoDisks_MatchesTypedDeviceLabel(t *testing.T) {
+	disks := []models.PhysicalDisk{{
+		Node:        "node1",
+		Instance:    "inst",
+		DevPath:     "/dev/sda",
+		Temperature: 0,
+	}}
+	nodes := []models.Node{{
+		Name:              "node1",
+		Instance:          "inst",
+		LinkedHostAgentID: "host-1",
+	}}
+	hosts := []models.Host{{
+		ID: "host-1",
+		Sensors: models.HostSensorSummary{
+			SMART: []models.HostDiskSMART{{
+				Device:      "/dev/sda [scsi]",
+				Temperature: 41,
+			}},
+		},
+	}}
+
+	merged := mergeHostAgentSMARTIntoDisks(disks, nodes, hosts)
+	if len(merged) != 1 {
+		t.Fatalf("expected 1 merged disk, got %#v", merged)
+	}
+	if merged[0].Temperature != 41 {
+		t.Fatalf("expected SMART temperature 41, got %#v", merged[0])
 	}
 }

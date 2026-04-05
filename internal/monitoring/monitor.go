@@ -162,6 +162,20 @@ func (m *Monitor) getInstanceConfig(instanceName string) *config.PVEInstance {
 	return nil
 }
 
+func normalizeSMARTDeviceIdentifier(device string) string {
+	normalized := strings.TrimSpace(device)
+	if normalized == "" {
+		return ""
+	}
+
+	if base, suffix, found := strings.Cut(normalized, " ["); found && strings.HasSuffix(suffix, "]") {
+		normalized = base
+	}
+
+	normalized = strings.TrimSpace(normalized)
+	return strings.TrimPrefix(normalized, "/dev/")
+}
+
 func mergeNVMeTempsIntoDisks(disks []models.PhysicalDisk, nodes []models.Node) []models.PhysicalDisk {
 	if len(disks) == 0 || len(nodes) == 0 {
 		return disks
@@ -275,10 +289,10 @@ func mergeNVMeTempsIntoDisks(disks []models.PhysicalDisk, nodes []models.Node) [
 
 		// Last resort: match by device path (normalized)
 		if updated[i].Temperature == 0 {
-			normalizedDevPath := strings.TrimPrefix(updated[i].DevPath, "/dev/")
+			normalizedDevPath := normalizeSMARTDeviceIdentifier(updated[i].DevPath)
 			for _, temp := range smartTemps {
-				normalizedTempDev := strings.TrimPrefix(temp.Device, "/dev/")
-				if normalizedTempDev == normalizedDevPath {
+				normalizedTempDev := normalizeSMARTDeviceIdentifier(temp.Device)
+				if normalizedTempDev != "" && normalizedTempDev == normalizedDevPath {
 					if temp.Temperature > 0 && !temp.StandbySkipped {
 						updated[i].Temperature = temp.Temperature
 						log.Debug().
@@ -401,10 +415,10 @@ func mergeHostAgentSMARTIntoDisks(disks []models.PhysicalDisk, nodes []models.No
 
 		// Last resort: match by device path
 		if matched == nil {
-			normalizedDevPath := strings.TrimPrefix(updated[i].DevPath, "/dev/")
+			normalizedDevPath := normalizeSMARTDeviceIdentifier(updated[i].DevPath)
 			for j := range smartData {
-				normalizedDiskDev := strings.TrimPrefix(smartData[j].Device, "/dev/")
-				if normalizedDiskDev == normalizedDevPath {
+				normalizedDiskDev := normalizeSMARTDeviceIdentifier(smartData[j].Device)
+				if normalizedDiskDev != "" && normalizedDiskDev == normalizedDevPath {
 					matched = &smartData[j]
 					break
 				}
