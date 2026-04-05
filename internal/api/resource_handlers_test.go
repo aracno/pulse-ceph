@@ -108,3 +108,57 @@ func TestHandleGetResourceStats(t *testing.T) {
 	assert.Equal(t, 1, stats.TotalResources)
 	assert.Equal(t, 1, stats.WithAlerts)
 }
+
+func TestHandleGetResourceStatsClearsAlertCountAfterAlertsResolve(t *testing.T) {
+	handlers := NewResourceHandlers()
+	now := time.Now()
+	provider := &mutableResourceStateProvider{
+		snapshot: models.StateSnapshot{
+			VMs: []models.VM{{
+				ID:       "vm-1",
+				Name:     "vm-1",
+				Status:   "running",
+				LastSeen: now,
+			}},
+			ActiveAlerts: []models.Alert{{
+				ID:         "vm-1-cpu",
+				ResourceID: "vm-1",
+				Type:       "cpu",
+				Level:      "warning",
+				Message:    "CPU high",
+				StartTime:  now,
+			}},
+		},
+	}
+	handlers.SetStateProvider(provider)
+
+	req := httptest.NewRequest("GET", "/api/resources/stats", nil)
+	w := httptest.NewRecorder()
+	handlers.HandleGetResourceStats(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var stats resources.StoreStats
+	err := json.NewDecoder(w.Body).Decode(&stats)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, stats.TotalResources)
+	assert.Equal(t, 1, stats.WithAlerts)
+
+	provider.snapshot = models.StateSnapshot{
+		VMs: []models.VM{{
+			ID:       "vm-1",
+			Name:     "vm-1",
+			Status:   "running",
+			LastSeen: now,
+		}},
+	}
+
+	req = httptest.NewRequest("GET", "/api/resources/stats", nil)
+	w = httptest.NewRecorder()
+	handlers.HandleGetResourceStats(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	err = json.NewDecoder(w.Body).Decode(&stats)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, stats.TotalResources)
+	assert.Equal(t, 0, stats.WithAlerts)
+}

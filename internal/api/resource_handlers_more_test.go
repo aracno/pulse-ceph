@@ -20,6 +20,14 @@ func (s stubResourceStateProvider) GetState() models.StateSnapshot {
 	return s.snapshot
 }
 
+type mutableResourceStateProvider struct {
+	snapshot models.StateSnapshot
+}
+
+func (s *mutableResourceStateProvider) GetState() models.StateSnapshot {
+	return s.snapshot
+}
+
 type stubTenantStateProvider struct {
 	snapshot models.StateSnapshot
 }
