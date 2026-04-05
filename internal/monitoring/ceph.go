@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +23,101 @@ func isCephStorageType(storageType string) bool {
 	}
 }
 
+func cephPollContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= 15*time.Second {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, 15*time.Second)
+}
+
+func fetchCephClusterData(ctx context.Context, instanceName string, client PVEClientInterface) (*proxmox.CephStatus, *proxmox.CephDF, error) {
+	cephCtx, cancel := cephPollContext(ctx)
+	defer cancel()
+
+	status, err := client.GetCephStatus(cephCtx)
+	if err != nil {
+		log.Debug().Err(err).Str("instance", instanceName).Msg("Ceph status unavailable - preserving previous Ceph state")
+		return nil, nil, err
+	}
+	if status == nil {
+		return nil, nil, nil
+	}
+
+	df, err := client.GetCephDF(cephCtx)
+	if err != nil {
+		log.Debug().Err(err).Str("instance", instanceName).Msg("Ceph DF unavailable - continuing with status-only data")
+	}
+
+	return status, df, nil
+}
+
+func normalizeCephPoolKey(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func cephPoolLookupCandidates(storage models.Storage) []string {
+	candidates := make([]string, 0, 2)
+	if pool := normalizeCephPoolKey(storage.Pool); pool != "" {
+		candidates = append(candidates, pool)
+	}
+	if name := normalizeCephPoolKey(storage.Name); name != "" {
+		candidates = append(candidates, name)
+	}
+	return slices.Compact(candidates)
+}
+
+func hydrateCephStorageUsageFromDF(storage []models.Storage, df *proxmox.CephDF) bool {
+	if len(storage) == 0 || df == nil || len(df.Data.Pools) == 0 {
+		return false
+	}
+
+	poolsByName := make(map[string]proxmox.CephDFPool, len(df.Data.Pools))
+	for _, pool := range df.Data.Pools {
+		key := normalizeCephPoolKey(pool.Name)
+		if key == "" {
+			continue
+		}
+		poolsByName[key] = pool
+	}
+
+	updated := false
+	for idx := range storage {
+		if !isCephStorageType(storage[idx].Type) {
+			continue
+		}
+
+		var pool proxmox.CephDFPool
+		found := false
+		for _, candidate := range cephPoolLookupCandidates(storage[idx]) {
+			match, ok := poolsByName[candidate]
+			if !ok {
+				continue
+			}
+			pool = match
+			found = true
+			break
+		}
+		if !found {
+			continue
+		}
+
+		used := int64(pool.Stats.BytesUsed)
+		free := int64(pool.Stats.MaxAvail)
+		total := used + free
+		if total <= 0 {
+			continue
+		}
+
+		storage[idx].Used = used
+		storage[idx].Free = free
+		storage[idx].Total = total
+		storage[idx].Usage = safePercentage(float64(used), float64(total))
+		updated = true
+	}
+
+	return updated
+}
+
 // pollCephCluster gathers Ceph cluster information when Ceph-backed storage is detected.
 func (m *Monitor) pollCephCluster(ctx context.Context, instanceName string, client PVEClientInterface, cephDetected bool) {
 	if !cephDetected {
@@ -30,27 +126,14 @@ func (m *Monitor) pollCephCluster(ctx context.Context, instanceName string, clie
 		return
 	}
 
-	cephCtx := ctx
-	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 15*time.Second {
-		var cancel context.CancelFunc
-		cephCtx, cancel = context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-	}
-
-	status, err := client.GetCephStatus(cephCtx)
+	status, df, err := fetchCephClusterData(ctx, instanceName, client)
 	if err != nil {
-		log.Debug().Err(err).Str("instance", instanceName).Msg("Ceph status unavailable – preserving previous Ceph state")
 		return
 	}
 	if status == nil {
-		log.Debug().Str("instance", instanceName).Msg("Ceph status response empty – clearing cached Ceph state")
+		log.Debug().Str("instance", instanceName).Msg("Ceph status response empty - clearing cached Ceph state")
 		m.state.UpdateCephClustersForInstance(instanceName, []models.CephCluster{})
 		return
-	}
-
-	df, err := client.GetCephDF(cephCtx)
-	if err != nil {
-		log.Debug().Err(err).Str("instance", instanceName).Msg("Ceph DF unavailable – continuing with status-only data")
 	}
 
 	cluster := buildCephClusterModel(instanceName, status, df)

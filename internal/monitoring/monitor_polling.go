@@ -1965,6 +1965,30 @@ func (m *Monitor) pollStorageWithNodes(ctx context.Context, instanceName string,
 		}
 	}
 
+	if !cephDetected {
+		for _, storage := range allStorage {
+			if isCephStorageType(storage.Type) {
+				cephDetected = true
+				break
+			}
+		}
+	}
+
+	var cephStatus *proxmox.CephStatus
+	var cephDF *proxmox.CephDF
+	cephFetchAttempted := false
+	cephFetchFailed := false
+	if (instanceCfg == nil || !instanceCfg.DisableCeph) && cephDetected {
+		cephFetchAttempted = true
+		var err error
+		cephStatus, cephDF, err = fetchCephClusterData(ctx, instanceName, client)
+		if err != nil {
+			cephFetchFailed = true
+		} else if cephStatus != nil {
+			hydrateCephStorageUsageFromDF(allStorage, cephDF)
+		}
+	}
+
 	// Record metrics and check alerts for all storage devices
 	for _, storage := range allStorage {
 		if m.metricsHistory != nil {
@@ -1988,21 +2012,25 @@ func (m *Monitor) pollStorageWithNodes(ctx context.Context, instanceName string,
 		}
 	}
 
-	if !cephDetected {
-		for _, storage := range allStorage {
-			if isCephStorageType(storage.Type) {
-				cephDetected = true
-				break
-			}
-		}
-	}
-
 	// Update state with all storage
 	m.state.UpdateStorageForInstance(storageInstanceName, allStorage)
 
 	// Poll Ceph cluster data after refreshing storage information
 	if instanceCfg == nil || !instanceCfg.DisableCeph {
-		m.pollCephCluster(ctx, instanceName, client, cephDetected)
+		switch {
+		case !cephDetected:
+			m.state.UpdateCephClustersForInstance(instanceName, []models.CephCluster{})
+		case cephFetchAttempted && cephFetchFailed:
+			// Preserve previous Ceph state when the refresh fails.
+		case cephFetchAttempted && cephStatus == nil:
+			m.state.UpdateCephClustersForInstance(instanceName, []models.CephCluster{})
+		default:
+			cluster := buildCephClusterModel(instanceName, cephStatus, cephDF)
+			if cluster.ID == "" {
+				cluster.ID = instanceName
+			}
+			m.state.UpdateCephClustersForInstance(instanceName, []models.CephCluster{cluster})
+		}
 	}
 
 	duration := time.Since(startTime)

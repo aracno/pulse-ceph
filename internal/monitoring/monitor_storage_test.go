@@ -17,6 +17,8 @@ type fakeStorageClient struct {
 	allStorage     []proxmox.Storage
 	storageByNode  map[string][]proxmox.Storage
 	zfsPoolsByNode map[string][]proxmox.ZFSPoolInfo
+	cephStatus     *proxmox.CephStatus
+	cephDF         *proxmox.CephDF
 }
 
 func (f *fakeStorageClient) GetNodes(ctx context.Context) ([]proxmox.Node, error) {
@@ -137,11 +139,11 @@ func (f *fakeStorageClient) GetDisks(ctx context.Context, node string) ([]proxmo
 }
 
 func (f *fakeStorageClient) GetCephStatus(ctx context.Context) (*proxmox.CephStatus, error) {
-	return nil, nil
+	return f.cephStatus, nil
 }
 
 func (f *fakeStorageClient) GetCephDF(ctx context.Context) (*proxmox.CephDF, error) {
-	return nil, nil
+	return f.cephDF, nil
 }
 
 func (f *fakeStorageClient) GetNodePendingUpdates(ctx context.Context, node string) ([]proxmox.AptPackage, error) {
@@ -433,6 +435,109 @@ func TestPollStorageWithNodesOptimizedSynthesizesSharedClusterOnlyStorage(t *tes
 	}
 	if len(shared.NodeIDs) != 2 || shared.NodeIDs[0] != "inst1-pve1" || shared.NodeIDs[1] != "inst1-pve2" {
 		t.Fatalf("shared storage node IDs = %#v, want [inst1-pve1 inst1-pve2]", shared.NodeIDs)
+	}
+}
+
+func TestPollStorageWithNodesOptimizedHydratesSharedCephStorageFromDF(t *testing.T) {
+	t.Setenv("PULSE_DATA_DIR", t.TempDir())
+
+	monitor := &Monitor{
+		state:          &models.State{},
+		metricsHistory: NewMetricsHistory(16, time.Hour),
+		alertManager:   alerts.NewManager(),
+	}
+	t.Cleanup(func() {
+		monitor.alertManager.Stop()
+	})
+
+	cfg := monitor.alertManager.GetConfig()
+	cfg.MinimumDelta = 0
+	if cfg.TimeThresholds == nil {
+		cfg.TimeThresholds = make(map[string]int)
+	}
+	cfg.TimeThresholds["storage"] = 0
+	cfg.StorageDefault = alerts.HysteresisThreshold{Trigger: 10, Clear: 5}
+	monitor.alertManager.UpdateConfig(cfg)
+
+	cephStorage := proxmox.Storage{
+		Storage: "ceph-shared",
+		Type:    "rbd",
+		Content: "images,rootdir",
+		Nodes:   "pve1,pve2",
+		Pool:    "ceph-pool",
+	}
+
+	client := &fakeStorageClient{
+		allStorage: []proxmox.Storage{cephStorage},
+		storageByNode: map[string][]proxmox.Storage{
+			"pve1": {},
+			"pve2": {},
+		},
+		cephStatus: &proxmox.CephStatus{
+			FSID: "ceph-fsid",
+			PGMap: proxmox.CephPGMap{
+				BytesTotal: 1000,
+				BytesUsed:  200,
+				BytesAvail: 800,
+			},
+		},
+		cephDF: &proxmox.CephDF{
+			Data: proxmox.CephDFData{
+				Pools: []proxmox.CephDFPool{
+					{
+						ID:   1,
+						Name: "ceph-pool",
+						Stats: proxmox.CephDFPoolStat{
+							BytesUsed:   200,
+							MaxAvail:    800,
+							PercentUsed: 20,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	nodes := []proxmox.Node{
+		{Node: "pve1", Status: "online"},
+		{Node: "pve2", Status: "online"},
+	}
+
+	monitor.pollStorageWithNodes(context.Background(), "inst1", client, nodes)
+
+	var shared *models.Storage
+	for i := range monitor.state.Storage {
+		if monitor.state.Storage[i].ID == "inst1-cluster-ceph-shared" {
+			shared = &monitor.state.Storage[i]
+			break
+		}
+	}
+	if shared == nil {
+		t.Fatal("expected synthesized shared Ceph storage entry")
+	}
+	if shared.Total != 1000 {
+		t.Fatalf("shared storage total = %d, want 1000", shared.Total)
+	}
+	if shared.Used != 200 {
+		t.Fatalf("shared storage used = %d, want 200", shared.Used)
+	}
+	if shared.Free != 800 {
+		t.Fatalf("shared storage free = %d, want 800", shared.Free)
+	}
+	if diff := math.Abs(shared.Usage - 20); diff > 0.001 {
+		t.Fatalf("shared storage usage = %.4f, want 20", shared.Usage)
+	}
+
+	alerts := monitor.alertManager.GetActiveAlerts()
+	found := false
+	for _, alert := range alerts {
+		if alert.ID == "inst1-cluster-ceph-shared-usage" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected shared Ceph storage usage alert to be active")
 	}
 }
 
