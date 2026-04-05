@@ -328,14 +328,17 @@ func bestZFSMountpoints(datasets []zfsDatasetUsage) map[string]string {
 }
 
 func zfsMountpointScore(ds zfsDatasetUsage) int {
-	if ds.Dataset != "" && !strings.Contains(ds.Dataset, "/") {
+	if strings.TrimSpace(ds.Mountpoint) == "/" {
 		return 0
+	}
+	if ds.Dataset != "" && !strings.Contains(ds.Dataset, "/") {
+		return 1
 	}
 	path := strings.Trim(ds.Mountpoint, "/")
 	if path == "" {
-		return 1
+		return 0
 	}
-	return 1 + strings.Count(path, "/")
+	return 2 + strings.Count(path, "/")
 }
 
 func zfsPoolFromDevice(device string) string {
