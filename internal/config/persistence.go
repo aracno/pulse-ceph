@@ -565,7 +565,15 @@ func (c *ConfigPersistence) LoadAlertConfig() (*alerts.AlertConfig, error) {
 				},
 				Overrides: make(map[string]alerts.ThresholdConfig),
 				Schedule: alerts.ScheduleConfig{
+					Cooldown:        5,
+					MaxAlertsHour:   10,
 					NotifyOnResolve: true,
+					Grouping: alerts.GroupingConfig{
+						Enabled: true,
+						Window:  30,
+						ByNode:  true,
+						ByGuest: false,
+					},
 				},
 			}, nil
 		}
@@ -579,9 +587,62 @@ func (c *ConfigPersistence) LoadAlertConfig() (*alerts.AlertConfig, error) {
 
 	// For empty config files ({}), enable alerts by default
 	// This handles the case where the file exists but is empty
-	if string(data) == "{}" {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("{}")) {
 		config.Enabled = true
 	}
+
+	defaultSchedule := alerts.ScheduleConfig{
+		Cooldown:        5,
+		MaxAlertsHour:   10,
+		NotifyOnResolve: true,
+		Grouping: alerts.GroupingConfig{
+			Enabled: true,
+			Window:  30,
+			ByNode:  true,
+			ByGuest: false,
+		},
+	}
+	var scheduleProbe struct {
+		Schedule *struct {
+			Cooldown        *int  `json:"cooldown"`
+			MaxAlertsHour   *int  `json:"maxAlertsHour"`
+			NotifyOnResolve *bool `json:"notifyOnResolve"`
+			Grouping        *struct {
+				Enabled *bool `json:"enabled"`
+				Window  *int  `json:"window"`
+				ByNode  *bool `json:"byNode"`
+				ByGuest *bool `json:"byGuest"`
+			} `json:"grouping"`
+		} `json:"schedule"`
+	}
+	if err := json.Unmarshal(data, &scheduleProbe); err == nil {
+		if scheduleProbe.Schedule == nil || scheduleProbe.Schedule.Cooldown == nil {
+			config.Schedule.Cooldown = defaultSchedule.Cooldown
+		}
+		if scheduleProbe.Schedule == nil || scheduleProbe.Schedule.MaxAlertsHour == nil {
+			config.Schedule.MaxAlertsHour = defaultSchedule.MaxAlertsHour
+		}
+		if scheduleProbe.Schedule == nil || scheduleProbe.Schedule.NotifyOnResolve == nil {
+			config.Schedule.NotifyOnResolve = defaultSchedule.NotifyOnResolve
+		}
+		if scheduleProbe.Schedule == nil || scheduleProbe.Schedule.Grouping == nil {
+			config.Schedule.Grouping = defaultSchedule.Grouping
+		} else {
+			if scheduleProbe.Schedule.Grouping.Enabled == nil {
+				config.Schedule.Grouping.Enabled = defaultSchedule.Grouping.Enabled
+			}
+			if scheduleProbe.Schedule.Grouping.Window == nil {
+				config.Schedule.Grouping.Window = defaultSchedule.Grouping.Window
+			}
+			if scheduleProbe.Schedule.Grouping.ByNode == nil {
+				config.Schedule.Grouping.ByNode = defaultSchedule.Grouping.ByNode
+			}
+			if scheduleProbe.Schedule.Grouping.ByGuest == nil {
+				config.Schedule.Grouping.ByGuest = defaultSchedule.Grouping.ByGuest
+			}
+		}
+	}
+
 	// Storage: Allow Trigger=0 to disable storage alerting
 	if config.StorageDefault.Trigger < 0 {
 		config.StorageDefault.Trigger = 85
@@ -727,18 +788,6 @@ func (c *ConfigPersistence) LoadAlertConfig() (*alerts.AlertConfig, error) {
 		}
 		config.BackupDefaults.IgnoreVMIDs = normalized
 	}
-	// Default NotifyOnResolve to true if not explicitly set in saved config.
-	// Older configs (pre-5.1.12) don't have this field, so Go unmarshals it
-	// as false — but the intended default is true (recovery notifications ON).
-	var scheduleProbe struct {
-		Schedule struct {
-			NotifyOnResolve *bool `json:"notifyOnResolve"`
-		} `json:"schedule"`
-	}
-	if err := json.Unmarshal(data, &scheduleProbe); err == nil && scheduleProbe.Schedule.NotifyOnResolve == nil {
-		config.Schedule.NotifyOnResolve = true
-	}
-
 	config.MetricTimeThresholds = alerts.NormalizeMetricTimeThresholds(config.MetricTimeThresholds)
 	config.DockerIgnoredContainerPrefixes = alerts.NormalizeDockerIgnoredPrefixes(config.DockerIgnoredContainerPrefixes)
 

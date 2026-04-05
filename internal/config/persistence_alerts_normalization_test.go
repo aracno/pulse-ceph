@@ -26,6 +26,54 @@ func TestLoadAlertConfig_Normalization(t *testing.T) {
 			input: map[string]interface{}{},
 			verify: func(t *testing.T, cfg *alerts.AlertConfig) {
 				assert.True(t, cfg.Enabled)
+				assert.Equal(t, 5, cfg.Schedule.Cooldown)
+				assert.Equal(t, 10, cfg.Schedule.MaxAlertsHour)
+				assert.True(t, cfg.Schedule.NotifyOnResolve)
+				assert.True(t, cfg.Schedule.Grouping.Enabled)
+				assert.Equal(t, 30, cfg.Schedule.Grouping.Window)
+				assert.True(t, cfg.Schedule.Grouping.ByNode)
+				assert.False(t, cfg.Schedule.Grouping.ByGuest)
+			},
+		},
+		{
+			name: "Legacy schedule missing cooldown and grouping defaults",
+			input: map[string]interface{}{
+				"schedule": map[string]interface{}{
+					"notifyOnResolve": false,
+				},
+			},
+			verify: func(t *testing.T, cfg *alerts.AlertConfig) {
+				assert.Equal(t, 5, cfg.Schedule.Cooldown)
+				assert.Equal(t, 10, cfg.Schedule.MaxAlertsHour)
+				assert.False(t, cfg.Schedule.NotifyOnResolve)
+				assert.True(t, cfg.Schedule.Grouping.Enabled)
+				assert.Equal(t, 30, cfg.Schedule.Grouping.Window)
+				assert.True(t, cfg.Schedule.Grouping.ByNode)
+				assert.False(t, cfg.Schedule.Grouping.ByGuest)
+			},
+		},
+		{
+			name: "Explicit zero cooldown preserved",
+			input: map[string]interface{}{
+				"schedule": map[string]interface{}{
+					"cooldown":        0,
+					"notifyOnResolve": true,
+					"grouping": map[string]interface{}{
+						"enabled": false,
+						"window":  0,
+						"byNode":  false,
+						"byGuest": true,
+					},
+				},
+			},
+			verify: func(t *testing.T, cfg *alerts.AlertConfig) {
+				assert.Equal(t, 0, cfg.Schedule.Cooldown)
+				assert.Equal(t, 10, cfg.Schedule.MaxAlertsHour)
+				assert.True(t, cfg.Schedule.NotifyOnResolve)
+				assert.False(t, cfg.Schedule.Grouping.Enabled)
+				assert.Equal(t, 0, cfg.Schedule.Grouping.Window)
+				assert.False(t, cfg.Schedule.Grouping.ByNode)
+				assert.True(t, cfg.Schedule.Grouping.ByGuest)
 			},
 		},
 		{
