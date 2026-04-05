@@ -541,6 +541,98 @@ func TestPollStorageWithNodesOptimizedHydratesSharedCephStorageFromDF(t *testing
 	}
 }
 
+func TestPollStorageWithNodesOptimizedClearsStaleStorageAlertsWhenIdentityChanges(t *testing.T) {
+	t.Setenv("PULSE_DATA_DIR", t.TempDir())
+
+	monitor := &Monitor{
+		state:          &models.State{},
+		metricsHistory: NewMetricsHistory(16, time.Hour),
+		alertManager:   alerts.NewManager(),
+	}
+	t.Cleanup(func() {
+		monitor.alertManager.Stop()
+	})
+
+	cfg := monitor.alertManager.GetConfig()
+	cfg.MinimumDelta = 0
+	if cfg.TimeThresholds == nil {
+		cfg.TimeThresholds = make(map[string]int)
+	}
+	cfg.TimeThresholds["storage"] = 0
+	cfg.StorageDefault = alerts.HysteresisThreshold{Trigger: 80, Clear: 70}
+	monitor.alertManager.UpdateConfig(cfg)
+
+	nodes := []proxmox.Node{{Node: "node1", Status: "online"}}
+
+	oldStorage := proxmox.Storage{
+		Storage:   "local",
+		Type:      "dir",
+		Content:   "images",
+		Active:    1,
+		Enabled:   1,
+		Shared:    0,
+		Total:     1000,
+		Used:      900,
+		Available: 100,
+	}
+	oldClient := &fakeStorageClient{
+		allStorage: []proxmox.Storage{oldStorage},
+		storageByNode: map[string][]proxmox.Storage{
+			"node1": {oldStorage},
+		},
+	}
+
+	monitor.pollStorageWithNodes(context.Background(), "inst1", oldClient, nodes)
+
+	foundOldAlert := false
+	for _, alert := range monitor.alertManager.GetActiveAlerts() {
+		if alert.ID == "inst1-node1-local-usage" {
+			foundOldAlert = true
+			break
+		}
+	}
+	if !foundOldAlert {
+		t.Fatal("expected initial storage usage alert to be active")
+	}
+
+	newStorage := proxmox.Storage{
+		Storage:   "rootfs",
+		Type:      "dir",
+		Content:   "images",
+		Active:    1,
+		Enabled:   1,
+		Shared:    0,
+		Total:     1000,
+		Used:      200,
+		Available: 800,
+	}
+	newClient := &fakeStorageClient{
+		allStorage: []proxmox.Storage{newStorage},
+		storageByNode: map[string][]proxmox.Storage{
+			"node1": {newStorage},
+		},
+	}
+
+	monitor.pollStorageWithNodes(context.Background(), "inst1", newClient, nodes)
+
+	foundOldAlert = false
+	foundNewAlert := false
+	for _, alert := range monitor.alertManager.GetActiveAlerts() {
+		switch alert.ID {
+		case "inst1-node1-local-usage":
+			foundOldAlert = true
+		case "inst1-node1-rootfs-usage":
+			foundNewAlert = true
+		}
+	}
+	if foundOldAlert {
+		t.Fatal("expected stale storage usage alert to be cleared after storage identity changed")
+	}
+	if foundNewAlert {
+		t.Fatal("expected no usage alert for replacement storage below threshold")
+	}
+}
+
 func TestPollStorageWithNodesOptimizedAttachesZFSPoolForDirStorageOnDatasetPath(t *testing.T) {
 	t.Setenv("PULSE_DATA_DIR", t.TempDir())
 

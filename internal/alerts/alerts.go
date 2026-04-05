@@ -5329,6 +5329,79 @@ func (m *Manager) CheckStorage(storage models.Storage) {
 	}
 }
 
+// SyncStorageAlertsForInstance clears storage-related alerts that no longer map
+// to the current storage inventory for an instance. This handles cases where a
+// storage disappears or changes identity between polls; relying on the generic
+// 24h stale-alert cleanup keeps the alert visible far too long.
+func (m *Manager) SyncStorageAlertsForInstance(instanceName string, storages []models.Storage) {
+	instanceName = strings.TrimSpace(instanceName)
+	if instanceName == "" {
+		return
+	}
+
+	validAlertIDs := make(map[string]struct{}, len(storages)*4)
+	for _, storage := range storages {
+		if strings.TrimSpace(storage.Instance) != instanceName {
+			continue
+		}
+
+		validAlertIDs[fmt.Sprintf("%s-usage", storage.ID)] = struct{}{}
+		validAlertIDs[fmt.Sprintf("storage-offline-%s", storage.ID)] = struct{}{}
+
+		if storage.ZFSPool == nil {
+			continue
+		}
+
+		validAlertIDs[fmt.Sprintf("zfs-pool-state-%s", storage.ID)] = struct{}{}
+		validAlertIDs[fmt.Sprintf("zfs-pool-errors-%s", storage.ID)] = struct{}{}
+		for _, device := range storage.ZFSPool.Devices {
+			validAlertIDs[fmt.Sprintf("zfs-device-%s-%s", storage.ID, device.Name)] = struct{}{}
+		}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for alertID, alert := range m.activeAlerts {
+		if alert == nil {
+			continue
+		}
+		if strings.TrimSpace(alert.Instance) != instanceName {
+			continue
+		}
+		if !isStorageInventoryAlert(alertID, alert) {
+			continue
+		}
+		if _, exists := validAlertIDs[alertID]; exists {
+			continue
+		}
+		m.clearAlertNoLock(alertID)
+	}
+}
+
+func isStorageInventoryAlert(alertID string, alert *Alert) bool {
+	if alert == nil {
+		return false
+	}
+
+	switch alert.Type {
+	case "usage", "zfs-pool-state", "zfs-pool-errors", "zfs-device":
+		return true
+	}
+
+	if strings.HasPrefix(alertID, "storage-offline-") {
+		return true
+	}
+
+	if alert.Metadata != nil {
+		if resourceType, ok := alert.Metadata["resourceType"].(string); ok && strings.EqualFold(strings.TrimSpace(resourceType), "storage") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // BuildGuestKey constructs a unique key for a guest from instance, node, and VMID.
 // Uses the canonical format: instance:node:vmid
 // This matches the format used by makeGuestID in the monitoring package.

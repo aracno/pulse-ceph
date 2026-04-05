@@ -2011,6 +2011,9 @@ func (m *Monitor) pollStorageWithNodes(ctx context.Context, instanceName string,
 			m.alertManager.CheckStorage(storage)
 		}
 	}
+	if m.alertManager != nil {
+		m.alertManager.SyncStorageAlertsForInstance(storageInstanceName, allStorage)
+	}
 
 	// Update state with all storage
 	m.state.UpdateStorageForInstance(storageInstanceName, allStorage)
