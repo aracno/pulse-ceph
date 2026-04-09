@@ -4934,6 +4934,15 @@ func (m *Manager) clearDockerContainerUpdateTracking(resourceID, trackingKey str
 	m.mu.Unlock()
 }
 
+func (m *Manager) touchDockerContainerUpdateAlert(alertID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if alert, exists := m.activeAlerts[alertID]; exists && alert != nil {
+		alert.LastSeen = time.Now()
+	}
+}
+
 func dockerUpdateTrackingKeyFromAlert(alert *Alert) string {
 	if alert == nil || alert.Metadata == nil {
 		return ""
@@ -5040,16 +5049,17 @@ func (m *Manager) checkDockerContainerImageUpdate(host models.DockerHost, contai
 
 	// Check if this container has an update status reported
 	if container.UpdateStatus == nil {
-		// No update status - clear any tracking and alerts
-		m.clearAlert(alertID)
-		m.clearDockerContainerUpdateTracking(resourceID, updateTrackingKey)
+		// Missing update status means the condition is currently unknown, not resolved.
+		// Preserve any pending update alert and tracking until we see an affirmative clear.
+		m.touchDockerContainerUpdateAlert(alertID)
 		return
 	}
 
 	// Check for errors in update detection (don't alert on errors)
 	if container.UpdateStatus.Error != "" {
-		// Update check failed - clear alert but keep tracking
-		m.clearAlert(alertID)
+		// A failed update check cannot confirm the update has been resolved.
+		// Keep the existing alert active and preserve first-seen tracking.
+		m.touchDockerContainerUpdateAlert(alertID)
 		return
 	}
 

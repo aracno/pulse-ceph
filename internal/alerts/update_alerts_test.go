@@ -318,6 +318,183 @@ func TestCheckDockerContainerImageUpdatePreservesDelayAcrossHostIDChange(t *test
 	}
 }
 
+func TestCheckDockerContainerImageUpdatePreservesTrackingWhenStatusUnknown(t *testing.T) {
+	tests := []struct {
+		name         string
+		updateStatus *models.DockerContainerUpdateStatus
+	}{
+		{
+			name:         "missing update status",
+			updateStatus: nil,
+		},
+		{
+			name: "errored update status",
+			updateStatus: &models.DockerContainerUpdateStatus{
+				Error:       "rate limited",
+				LastChecked: time.Now(),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestManager(t)
+			m.mu.Lock()
+			m.config.DockerDefaults.UpdateAlertDelayHours = 24
+			m.mu.Unlock()
+
+			host := models.DockerHost{
+				ID:          "docker-host-unknown-status",
+				DisplayName: "Docker Host",
+				Hostname:    "docker.local",
+			}
+			container := models.DockerContainer{
+				ID:           "container-unknown-status",
+				Name:         "/frontend",
+				Image:        "nginx:latest",
+				UpdateStatus: tt.updateStatus,
+			}
+			resourceID := dockerResourceID(host.ID, container.ID)
+			trackingKey := dockerUpdateTrackingKey(host, container)
+			firstSeen := time.Now().Add(-6 * time.Hour)
+
+			m.mu.Lock()
+			m.dockerUpdateFirstSeen[resourceID] = firstSeen
+			m.dockerUpdateFirstSeenByIdentity[trackingKey] = firstSeen
+			m.mu.Unlock()
+
+			m.checkDockerContainerImageUpdate(host, container, resourceID, "frontend", "docker-instance", "docker.local")
+
+			m.mu.RLock()
+			resourceTrackedAt, hasResourceTracking := m.dockerUpdateFirstSeen[resourceID]
+			identityTrackedAt, hasIdentityTracking := m.dockerUpdateFirstSeenByIdentity[trackingKey]
+			_, hasAlert := m.activeAlerts["docker-container-update-"+resourceID]
+			m.mu.RUnlock()
+
+			if !hasResourceTracking {
+				t.Fatalf("expected resource tracking to remain when update status is unknown")
+			}
+			if !hasIdentityTracking {
+				t.Fatalf("expected identity tracking to remain when update status is unknown")
+			}
+			if !resourceTrackedAt.Equal(firstSeen) {
+				t.Fatalf("expected resource tracking firstSeen to remain %s, got %s", firstSeen, resourceTrackedAt)
+			}
+			if !identityTrackedAt.Equal(firstSeen) {
+				t.Fatalf("expected identity tracking firstSeen to remain %s, got %s", firstSeen, identityTrackedAt)
+			}
+			if hasAlert {
+				t.Fatalf("did not expect an alert to be created while update status is unknown")
+			}
+		})
+	}
+}
+
+func TestCheckDockerContainerImageUpdateKeepsActiveAlertWhenStatusUnknown(t *testing.T) {
+	tests := []struct {
+		name         string
+		updateStatus *models.DockerContainerUpdateStatus
+	}{
+		{
+			name:         "missing update status",
+			updateStatus: nil,
+		},
+		{
+			name: "errored update status",
+			updateStatus: &models.DockerContainerUpdateStatus{
+				Error:       "rate limited",
+				LastChecked: time.Now(),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestManager(t)
+			m.mu.Lock()
+			m.config.DockerDefaults.UpdateAlertDelayHours = 24
+			m.mu.Unlock()
+
+			host := models.DockerHost{
+				ID:          "docker-host-active-alert",
+				DisplayName: "Docker Host",
+				Hostname:    "docker.local",
+			}
+			container := models.DockerContainer{
+				ID:           "container-active-alert",
+				Name:         "/frontend",
+				Image:        "nginx:latest",
+				UpdateStatus: tt.updateStatus,
+			}
+			resourceID := dockerResourceID(host.ID, container.ID)
+			alertID := "docker-container-update-" + resourceID
+			trackingKey := dockerUpdateTrackingKey(host, container)
+			firstSeen := time.Now().Add(-48 * time.Hour)
+			previousLastSeen := time.Now().Add(-30 * time.Minute)
+
+			m.mu.Lock()
+			m.activeAlerts[alertID] = &Alert{
+				ID:           alertID,
+				Type:         "docker-container-update",
+				ResourceID:   resourceID,
+				ResourceName: "frontend",
+				Instance:     "Docker",
+				StartTime:    firstSeen,
+				LastSeen:     previousLastSeen,
+				Metadata: map[string]interface{}{
+					"resourceType":  "Docker Container",
+					"hostId":        host.ID,
+					"hostName":      host.DisplayName,
+					"hostHostname":  host.Hostname,
+					"containerId":   container.ID,
+					"containerName": "frontend",
+					"image":         container.Image,
+				},
+			}
+			m.dockerUpdateFirstSeen[resourceID] = firstSeen
+			m.dockerUpdateFirstSeenByIdentity[trackingKey] = firstSeen
+			m.mu.Unlock()
+
+			m.checkDockerContainerImageUpdate(host, container, resourceID, "frontend", "docker-instance", "docker.local")
+
+			m.mu.RLock()
+			alert, hasAlert := m.activeAlerts[alertID]
+			resourceTrackedAt, hasResourceTracking := m.dockerUpdateFirstSeen[resourceID]
+			identityTrackedAt, hasIdentityTracking := m.dockerUpdateFirstSeenByIdentity[trackingKey]
+			m.mu.RUnlock()
+
+			m.resolvedMutex.RLock()
+			_, wasResolved := m.recentlyResolved[alertID]
+			m.resolvedMutex.RUnlock()
+
+			if !hasAlert {
+				t.Fatalf("expected active docker update alert to remain when update status is unknown")
+			}
+			if !hasResourceTracking {
+				t.Fatalf("expected resource tracking to remain when update status is unknown")
+			}
+			if !hasIdentityTracking {
+				t.Fatalf("expected identity tracking to remain when update status is unknown")
+			}
+			if wasResolved {
+				t.Fatalf("did not expect docker update alert to be marked resolved when update status is unknown")
+			}
+			if !resourceTrackedAt.Equal(firstSeen) {
+				t.Fatalf("expected resource tracking firstSeen to remain %s, got %s", firstSeen, resourceTrackedAt)
+			}
+			if !identityTrackedAt.Equal(firstSeen) {
+				t.Fatalf("expected identity tracking firstSeen to remain %s, got %s", firstSeen, identityTrackedAt)
+			}
+			if !alert.StartTime.Equal(firstSeen) {
+				t.Fatalf("expected alert StartTime to remain %s, got %s", firstSeen, alert.StartTime)
+			}
+			if !alert.LastSeen.After(previousLastSeen) {
+				t.Fatalf("expected alert LastSeen to advance beyond %s, got %s", previousLastSeen, alert.LastSeen)
+			}
+		})
+	}
+}
+
 // Note: Update alerts are now a free feature (no license gating).
 // The Pro license gating tests were removed when update alerts became free.
 
