@@ -230,3 +230,77 @@ func TestHandleAlertResolved_SendsRecoveryOutsideQuietHours(t *testing.T) {
 		t.Fatalf("timed out waiting for resolved notification webhook")
 	}
 }
+
+func TestEscalationCallback_QuietHoursSuppression(t *testing.T) {
+	received := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		body, _ := io.ReadAll(r.Body)
+		select {
+		case received <- body:
+		default:
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	notifMgr := notifications.NewNotificationManagerWithDataDir("http://pulse.example", t.TempDir())
+	if err := notifMgr.UpdateAllowedPrivateCIDRs("127.0.0.1/32,::1/128"); err != nil {
+		t.Fatalf("UpdateAllowedPrivateCIDRs: %v", err)
+	}
+	notifMgr.AddWebhook(notifications.WebhookConfig{
+		ID:      "esc-webhook",
+		Name:    "esc-webhook",
+		URL:     srv.URL,
+		Enabled: true,
+		Service: "generic",
+	})
+
+	alertMgr := alerts.NewManager()
+	cfg := alertMgr.GetConfig()
+	cfg.Enabled = true
+	cfg.Schedule.QuietHours.Enabled = true
+	cfg.Schedule.QuietHours.Timezone = "UTC"
+	cfg.Schedule.QuietHours.Days = map[string]bool{
+		"monday":    true,
+		"tuesday":   true,
+		"wednesday": true,
+		"thursday":  true,
+		"friday":    true,
+		"saturday":  true,
+		"sunday":    true,
+	}
+	now := time.Now().UTC()
+	cfg.Schedule.QuietHours.Start = now.Add(-1 * time.Hour).Format("15:04")
+	cfg.Schedule.QuietHours.End = now.Add(1 * time.Hour).Format("15:04")
+	cfg.Schedule.QuietHours.Suppress.Offline = true
+	cfg.Schedule.Escalation.Enabled = true
+	cfg.Schedule.Escalation.Levels = []alerts.EscalationLevel{
+		{After: 1, Notify: "webhook"},
+	}
+	alertMgr.UpdateConfig(cfg)
+
+	alert := &alerts.Alert{
+		ID:    "esc-offline",
+		Type:  "connectivity",
+		Level: alerts.AlertLevelCritical,
+	}
+	if !alertMgr.ShouldSuppressNotification(alert) {
+		t.Skip("quiet hours not active; cannot verify escalation suppression")
+	}
+
+	escalationLevel := alertMgr.GetConfig().Schedule.Escalation.Levels[0]
+	if !alertMgr.ShouldSuppressNotification(alert) {
+		notifMgr.SendAlertToChannels(alert, escalationLevel.Notify)
+	}
+
+	select {
+	case body := <-received:
+		var payload map[string]interface{}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("failed to parse unexpected webhook payload: %v", err)
+		}
+		t.Fatalf("expected escalation notification to be suppressed during quiet hours, got payload %#v", payload)
+	case <-time.After(500 * time.Millisecond):
+	}
+}
