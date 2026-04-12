@@ -379,6 +379,15 @@ check_root() {
     fi
 }
 
+installer_command_name() {
+    if [[ "$0" == "bash" ]] || [[ ! -f "$0" ]]; then
+        printf 'install.sh\n'
+        return 0
+    fi
+
+    basename "$0"
+}
+
 # V3 is deprecated - no longer checking for it
 
 detect_os() {
@@ -4150,7 +4159,7 @@ parse_args() {
                 fi
                 ;;
             -h|--help)
-                echo "Usage: $0 [OPTIONS]"
+                echo "Usage: $(installer_command_name) [OPTIONS]"
                 echo ""
                 echo "Installation options:"
                 echo "  --rc, --pre        Install latest RC/pre-release version"
@@ -4181,7 +4190,7 @@ parse_args() {
     fi
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
     parse_args "$@"
     auto_detect_container_environment
 

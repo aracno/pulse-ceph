@@ -175,12 +175,43 @@ test_parse_args_rejects_archive_with_source() {
   return 0
 }
 
+test_installer_runs_when_streamed_over_stdin() {
+  local tmpdir output_file
+  tmpdir="$(mktemp -d)"
+  output_file="${tmpdir}/output.txt"
+
+  if ! cat "${INSTALL_SCRIPT}" | bash -s -- --help >"${output_file}" 2>&1; then
+    echo "installer failed when streamed to bash" >&2
+    cat "${output_file}" >&2
+    rm -rf "${tmpdir}"
+    return 1
+  fi
+
+  if grep -q "BASH_SOURCE\\[0\\]: unbound variable" "${output_file}"; then
+    echo "installer still hit BASH_SOURCE unbound variable when streamed to bash" >&2
+    cat "${output_file}" >&2
+    rm -rf "${tmpdir}"
+    return 1
+  fi
+
+  if ! grep -q "Usage: install.sh \\[OPTIONS\\]" "${output_file}"; then
+    echo "expected streamed installer help to show install.sh usage" >&2
+    cat "${output_file}" >&2
+    rm -rf "${tmpdir}"
+    return 1
+  fi
+
+  rm -rf "${tmpdir}"
+  return 0
+}
+
 main() {
   assert_success "infer_release_from_archive_name parses prerelease tarballs" test_infer_release_from_archive_name_supports_prerelease
   assert_success "download_pulse installs from local archive without network" test_download_pulse_installs_from_local_archive_without_network
   assert_success "prefetch helper writes archive path via output variable" test_prefetch_pulse_archive_for_container_sets_output_var
   assert_success "wrong-arch archives fail before replacing the installed binary" test_install_pulse_archive_rejects_mismatched_arch_without_replacing_existing_binary
   assert_success "parse_args rejects archive with source builds" test_parse_args_rejects_archive_with_source
+  assert_success "installer supports curl-pipe execution via bash stdin" test_installer_runs_when_streamed_over_stdin
 
   if (( failures > 0 )); then
     echo "Total failures: ${failures}" >&2
