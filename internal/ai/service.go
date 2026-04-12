@@ -2969,11 +2969,13 @@ func (s *Service) AnalyzeForDiscovery(ctx context.Context, prompt string) (strin
 		return "", fmt.Errorf("AI provider not configured")
 	}
 
+	const discoveryResponseTokenBudget = 8192
+
 	// Make the API call
 	resp, err := provider.Chat(ctx, providers.ChatRequest{
 		Messages:  messages,
 		Model:     model,
-		MaxTokens: 4096, // Discovery responses need room for detailed JSON
+		MaxTokens: discoveryResponseTokenBudget, // Discovery responses need room for structured JSON
 	})
 
 	// If the primary provider fails (e.g., rate limited), try other configured providers
@@ -3005,7 +3007,7 @@ func (s *Service) AnalyzeForDiscovery(ctx context.Context, prompt string) (strin
 			resp, err = altProvider.Chat(ctx, providers.ChatRequest{
 				Messages:  messages,
 				Model:     altModel,
-				MaxTokens: 4096,
+				MaxTokens: discoveryResponseTokenBudget,
 			})
 			if err == nil {
 				model = altModel
