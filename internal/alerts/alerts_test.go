@@ -15154,6 +15154,128 @@ func TestCheckHostComprehensive(t *testing.T) {
 			t.Fatalf("expected qualified host resource name, got %q", alert.ResourceName)
 		}
 	})
+
+	t.Run("inherits linked node overrides for host agent metrics", func(t *testing.T) {
+		m := newTestManager(t)
+		m.ClearActiveAlerts()
+
+		m.mu.Lock()
+		m.config.TimeThreshold = 0
+		m.config.TimeThresholds = map[string]int{}
+		m.config.HostDefaults = ThresholdConfig{
+			Memory: &HysteresisThreshold{Trigger: 85.0, Clear: 80.0},
+		}
+		m.config.Overrides = map[string]ThresholdConfig{
+			"ProxmoxCluster-proxmoxn3": {
+				Memory: &HysteresisThreshold{Trigger: 97.0, Clear: 92.0},
+			},
+		}
+		m.mu.Unlock()
+
+		host := models.Host{
+			ID:           "host-proxmoxn3",
+			DisplayName:  "proxmoxn3",
+			Hostname:     "proxmoxn3",
+			LinkedNodeID: "ProxmoxCluster-proxmoxn3",
+			Memory: models.Memory{
+				Usage: 90.6,
+				Total: 1024,
+				Used:  928,
+				Free:  96,
+			},
+			Status:   "online",
+			LastSeen: time.Now(),
+		}
+
+		m.CheckHost(host)
+
+		m.mu.RLock()
+		_, exists := m.activeAlerts["host:host-proxmoxn3-memory"]
+		m.mu.RUnlock()
+
+		if exists {
+			t.Fatal("expected linked node override to suppress host-agent memory alert")
+		}
+	})
+
+	t.Run("inherits linked guest overrides for host agent metrics", func(t *testing.T) {
+		m := newTestManager(t)
+		m.ClearActiveAlerts()
+
+		m.mu.Lock()
+		m.config.TimeThreshold = 0
+		m.config.TimeThresholds = map[string]int{}
+		m.config.HostDefaults = ThresholdConfig{
+			CPU: &HysteresisThreshold{Trigger: 80.0, Clear: 75.0},
+		}
+		m.config.Overrides = map[string]ThresholdConfig{
+			"Main:node3:101": {
+				CPU: &HysteresisThreshold{Trigger: 105.0, Clear: 100.0},
+			},
+		}
+		m.mu.Unlock()
+
+		host := models.Host{
+			ID:          "host-hamster",
+			DisplayName: "Hamster",
+			Hostname:    "hamster.local",
+			LinkedVMID:  "Main:node3:101",
+			CPUUsage:    97.5,
+			Status:      "online",
+			LastSeen:    time.Now(),
+		}
+
+		m.CheckHost(host)
+
+		m.mu.RLock()
+		_, exists := m.activeAlerts["host:host-hamster-cpu"]
+		m.mu.RUnlock()
+
+		if exists {
+			t.Fatal("expected linked guest override to suppress host-agent cpu alert")
+		}
+	})
+
+	t.Run("prefers explicit host overrides over linked resource overrides", func(t *testing.T) {
+		m := newTestManager(t)
+		m.ClearActiveAlerts()
+
+		m.mu.Lock()
+		m.config.TimeThreshold = 0
+		m.config.TimeThresholds = map[string]int{}
+		m.config.HostDefaults = ThresholdConfig{
+			CPU: &HysteresisThreshold{Trigger: 80.0, Clear: 75.0},
+		}
+		m.config.Overrides = map[string]ThresholdConfig{
+			"Main:node3:101": {
+				CPU: &HysteresisThreshold{Trigger: 105.0, Clear: 100.0},
+			},
+			"host-hamster": {
+				CPU: &HysteresisThreshold{Trigger: 90.0, Clear: 85.0},
+			},
+		}
+		m.mu.Unlock()
+
+		host := models.Host{
+			ID:          "host-hamster",
+			DisplayName: "Hamster",
+			Hostname:    "hamster.local",
+			LinkedVMID:  "Main:node3:101",
+			CPUUsage:    97.5,
+			Status:      "online",
+			LastSeen:    time.Now(),
+		}
+
+		m.CheckHost(host)
+
+		m.mu.RLock()
+		alert := m.activeAlerts["host:host-hamster-cpu"]
+		m.mu.RUnlock()
+
+		if alert == nil {
+			t.Fatal("expected explicit host override to take precedence and trigger alert")
+		}
+	})
 }
 
 func TestCheckPBSComprehensive(t *testing.T) {

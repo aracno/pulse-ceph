@@ -1776,10 +1776,7 @@ func (m *Manager) reevaluateActiveAlertsLocked() {
 				continue
 			}
 			thresholds := m.config.HostDefaults
-			// Overrides are keyed by raw host ID (without the "host:" prefix
-			// that hostResourceID adds to the resource ID used in alert IDs).
-			rawHostID := strings.TrimPrefix(resourceID, "host:")
-			if override, exists := m.config.Overrides[rawHostID]; exists {
+			if override, exists := m.resolveHostAlertThresholdOverrideNoLock(alert, resourceID); exists {
 				if override.Disabled {
 					alertsToResolve = append(alertsToResolve, alertID)
 					continue
@@ -2908,6 +2905,68 @@ func hostInstanceName(host models.Host) string {
 	return "Host Agent"
 }
 
+func metadataStringValue(metadata map[string]interface{}, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	value, _ := metadata[key].(string)
+	return strings.TrimSpace(value)
+}
+
+// resolveHostThresholdOverrideNoLock resolves the most specific threshold override for a host agent.
+// Explicit host-agent overrides win. When no host override exists, linked node/guest overrides are
+// inherited so alerts follow the logical resource the host agent is augmenting.
+// Caller must hold m.mu because guest override lookups may migrate legacy keys in-place.
+func (m *Manager) resolveHostThresholdOverrideNoLock(hostID, linkedNodeID, linkedVMID, linkedContainerID string) (ThresholdConfig, bool) {
+	if hostID = strings.TrimSpace(hostID); hostID != "" {
+		if override, exists := m.config.Overrides[hostID]; exists {
+			return override, true
+		}
+	}
+
+	if linkedNodeID = strings.TrimSpace(linkedNodeID); linkedNodeID != "" {
+		if override, exists := m.config.Overrides[linkedNodeID]; exists {
+			return override, true
+		}
+	}
+
+	if linkedVMID = strings.TrimSpace(linkedVMID); linkedVMID != "" {
+		if override, exists := m.lookupGuestOverride(nil, linkedVMID); exists {
+			return override, true
+		}
+	}
+
+	if linkedContainerID = strings.TrimSpace(linkedContainerID); linkedContainerID != "" {
+		if override, exists := m.lookupGuestOverride(nil, linkedContainerID); exists {
+			return override, true
+		}
+	}
+
+	return ThresholdConfig{}, false
+}
+
+// resolveHostAlertThresholdOverrideNoLock resolves threshold overrides for persisted host alerts.
+// It uses alert metadata to inherit linked node/guest overrides when the alert came from a linked host agent.
+// Caller must hold m.mu.
+func (m *Manager) resolveHostAlertThresholdOverrideNoLock(alert *Alert, resourceID string) (ThresholdConfig, bool) {
+	hostID := strings.TrimSpace(strings.TrimPrefix(resourceID, "host:"))
+	if idx := strings.Index(hostID, "/"); idx >= 0 {
+		hostID = hostID[:idx]
+	}
+
+	var linkedNodeID, linkedVMID, linkedContainerID string
+	if alert != nil && alert.Metadata != nil {
+		if metadataHostID := metadataStringValue(alert.Metadata, "hostId"); metadataHostID != "" {
+			hostID = metadataHostID
+		}
+		linkedNodeID = metadataStringValue(alert.Metadata, "linkedNodeId")
+		linkedVMID = metadataStringValue(alert.Metadata, "linkedVmId")
+		linkedContainerID = metadataStringValue(alert.Metadata, "linkedContainerId")
+	}
+
+	return m.resolveHostThresholdOverrideNoLock(hostID, linkedNodeID, linkedVMID, linkedContainerID)
+}
+
 func sanitizeHostComponent(value string) string {
 	value = strings.TrimSpace(strings.ToLower(value))
 	if value == "" {
@@ -2977,12 +3036,17 @@ func (m *Manager) CheckHost(host models.Host) {
 	// Fresh telemetry marks the host as online and clears offline tracking.
 	m.HandleHostOnline(host)
 
-	m.mu.RLock()
+	m.mu.Lock()
 	alertsEnabled := m.config.Enabled
 	disableAllHosts := m.config.DisableAllHosts
 	thresholds := m.config.HostDefaults
-	override, hasOverride := m.config.Overrides[host.ID]
-	m.mu.RUnlock()
+	override, hasOverride := m.resolveHostThresholdOverrideNoLock(
+		host.ID,
+		host.LinkedNodeID,
+		host.LinkedVMID,
+		host.LinkedContainerID,
+	)
+	m.mu.Unlock()
 
 	if !alertsEnabled {
 		return
@@ -3021,6 +3085,15 @@ func (m *Manager) CheckHost(host models.Host) {
 		"osVersion":    host.OSVersion,
 		"agentVersion": host.AgentVersion,
 		"architecture": host.Architecture,
+	}
+	if linkedNodeID := strings.TrimSpace(host.LinkedNodeID); linkedNodeID != "" {
+		baseMetadata["linkedNodeId"] = linkedNodeID
+	}
+	if linkedVMID := strings.TrimSpace(host.LinkedVMID); linkedVMID != "" {
+		baseMetadata["linkedVmId"] = linkedVMID
+	}
+	if linkedContainerID := strings.TrimSpace(host.LinkedContainerID); linkedContainerID != "" {
+		baseMetadata["linkedContainerId"] = linkedContainerID
 	}
 	if len(host.Tags) > 0 {
 		baseMetadata["tags"] = append([]string(nil), host.Tags...)
@@ -3358,11 +3431,16 @@ func (m *Manager) HandleHostOffline(host models.Host) {
 	}
 
 	var disableConnectivity bool
-	m.mu.RLock()
-	if override, exists := m.config.Overrides[host.ID]; exists {
+	m.mu.Lock()
+	if override, exists := m.resolveHostThresholdOverrideNoLock(
+		host.ID,
+		host.LinkedNodeID,
+		host.LinkedVMID,
+		host.LinkedContainerID,
+	); exists {
 		disableConnectivity = override.DisableConnectivity || override.Disabled
 	}
-	m.mu.RUnlock()
+	m.mu.Unlock()
 
 	if disableConnectivity {
 		m.clearAlert(alertID)

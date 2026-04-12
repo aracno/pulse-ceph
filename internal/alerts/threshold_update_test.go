@@ -157,6 +157,64 @@ func TestReevaluateActiveAlertsWithOverride(t *testing.T) {
 	}
 }
 
+func TestReevaluateActiveAlertsWithLinkedHostOverride(t *testing.T) {
+	manager := NewManager()
+
+	manager.mu.Lock()
+	manager.activeAlerts = make(map[string]*Alert)
+	manager.mu.Unlock()
+
+	initialConfig := AlertConfig{
+		Enabled: true,
+		HostDefaults: ThresholdConfig{
+			Memory: &HysteresisThreshold{Trigger: 85, Clear: 80},
+		},
+		Overrides: make(map[string]ThresholdConfig),
+	}
+	manager.UpdateConfig(initialConfig)
+
+	alertID := "host:host-proxmoxn3-memory"
+	alert := &Alert{
+		ID:           alertID,
+		Type:         "memory",
+		Level:        AlertLevelWarning,
+		ResourceID:   "host:host-proxmoxn3",
+		ResourceName: "proxmoxn3 (Host Agent)",
+		Node:         "proxmoxn3",
+		Instance:     "linux",
+		Message:      "Host memory at 90.6%",
+		Value:        90.6,
+		Threshold:    85.0,
+		StartTime:    time.Now().Add(-5 * time.Minute),
+		LastSeen:     time.Now(),
+		Metadata: map[string]interface{}{
+			"resourceType": "Host",
+			"hostId":       "host-proxmoxn3",
+			"linkedNodeId": "ProxmoxCluster-proxmoxn3",
+		},
+	}
+
+	manager.mu.Lock()
+	manager.activeAlerts[alertID] = alert
+	manager.mu.Unlock()
+
+	updatedConfig := initialConfig
+	updatedConfig.Overrides["ProxmoxCluster-proxmoxn3"] = ThresholdConfig{
+		Memory: &HysteresisThreshold{Trigger: 97, Clear: 92},
+	}
+	manager.UpdateConfig(updatedConfig)
+
+	time.Sleep(100 * time.Millisecond)
+
+	manager.mu.RLock()
+	_, alertStillActive := manager.activeAlerts[alertID]
+	manager.mu.RUnlock()
+
+	if alertStillActive {
+		t.Errorf("expected linked host alert to be resolved after linked node override increase")
+	}
+}
+
 // TestReevaluateActiveAlertsStillAboveThreshold tests that alerts stay active if still above threshold
 func TestReevaluateActiveAlertsStillAboveThreshold(t *testing.T) {
 	manager := NewManager()
