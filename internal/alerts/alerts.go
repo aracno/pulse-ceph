@@ -519,13 +519,14 @@ type Manager struct {
 	// Time threshold tracking
 	pendingAlerts map[string]time.Time // Track when thresholds were first exceeded
 	// Offline confirmation tracking
-	nodeOfflineCount      map[string]int                  // Track consecutive offline counts for nodes (legacy)
-	offlineConfirmations  map[string]int                  // Track consecutive offline counts for all resources
-	dockerOfflineCount    map[string]int                  // Track consecutive offline counts for Docker hosts
-	dockerStateConfirm    map[string]int                  // Track consecutive state confirmations for Docker containers
-	dockerRestartTracking map[string]*dockerRestartRecord // Track restart counts and times for restart loop detection
-	dockerLastExitCode    map[string]int                  // Track last exit code for OOM detection
-	dockerUpdateFirstSeen map[string]time.Time            // Track when image updates were first detected for alert delay
+	nodeOfflineCount             map[string]int                  // Track consecutive offline counts for nodes (legacy)
+	offlineConfirmations         map[string]int                  // Track consecutive offline counts for all resources
+	offlineRecoveryConfirmations map[string]int                  // Track consecutive healthy confirmations before clearing poll-driven offline alerts
+	dockerOfflineCount           map[string]int                  // Track consecutive offline counts for Docker hosts
+	dockerStateConfirm           map[string]int                  // Track consecutive state confirmations for Docker containers
+	dockerRestartTracking        map[string]*dockerRestartRecord // Track restart counts and times for restart loop detection
+	dockerLastExitCode           map[string]int                  // Track last exit code for OOM detection
+	dockerUpdateFirstSeen        map[string]time.Time            // Track when image updates were first detected for alert delay
 	// Stable identity tracking prevents update-delay resets when host IDs churn.
 	dockerUpdateFirstSeenByIdentity map[string]time.Time
 	// PMG quarantine growth tracking
@@ -591,6 +592,7 @@ func NewManagerWithDataDir(dataDir string) *Manager {
 		pendingAlerts:                   make(map[string]time.Time),
 		nodeOfflineCount:                make(map[string]int),
 		offlineConfirmations:            make(map[string]int),
+		offlineRecoveryConfirmations:    make(map[string]int),
 		dockerOfflineCount:              make(map[string]int),
 		dockerStateConfirm:              make(map[string]int),
 		dockerRestartTracking:           make(map[string]*dockerRestartRecord),
@@ -7496,6 +7498,7 @@ func (m *Manager) removeActiveAlertNoLock(alertID string) {
 		m.historyManager.UpdateAlertLastSeen(alertID, alert.LastSeen)
 	}
 	delete(m.activeAlerts, alertID)
+	delete(m.offlineRecoveryConfirmations, alertID)
 	// NOTE: Don't delete ackState here - preserve it so if the same alert
 	// reappears (e.g., powered-off VM during backup), the acknowledgement
 	// is restored via preserveAlertState. ackState is cleaned up in Cleanup().
@@ -7504,6 +7507,22 @@ func (m *Manager) removeActiveAlertNoLock(alertID string) {
 		record.inactiveAt = time.Now()
 		m.ackState[alertID] = record
 	}
+}
+
+func (m *Manager) confirmOfflineRecoveryNoLock(alertID string, required int) (int, bool) {
+	if required <= 1 {
+		delete(m.offlineRecoveryConfirmations, alertID)
+		return required, true
+	}
+
+	m.offlineRecoveryConfirmations[alertID]++
+	confirmations := m.offlineRecoveryConfirmations[alertID]
+	if confirmations < required {
+		return confirmations, false
+	}
+
+	delete(m.offlineRecoveryConfirmations, alertID)
+	return confirmations, true
 }
 
 // GetActiveAlerts returns all active alerts
@@ -7628,6 +7647,7 @@ func (m *Manager) checkNodeOffline(node models.Node) {
 	defer m.mu.Unlock()
 
 	// Check if node connectivity alerts are disabled
+	delete(m.offlineRecoveryConfirmations, alertID)
 	if override, exists := m.config.Overrides[node.ID]; exists && override.DisableConnectivity {
 		// Node connectivity alerts are disabled, clear any existing alert and return
 		if _, alertExists := m.activeAlerts[alertID]; alertExists {
@@ -7734,6 +7754,18 @@ func (m *Manager) clearNodeOfflineAlert(node models.Node) {
 	// Check if offline alert exists
 	alert, exists := m.activeAlerts[alertID]
 	if !exists {
+		delete(m.offlineRecoveryConfirmations, alertID)
+		return
+	}
+
+	const requiredRecoveryCount = 3
+	recoveryCount, confirmed := m.confirmOfflineRecoveryNoLock(alertID, requiredRecoveryCount)
+	if !confirmed {
+		log.Debug().
+			Str("node", node.Name).
+			Int("confirmations", recoveryCount).
+			Int("required", requiredRecoveryCount).
+			Msg("Node appears back online, waiting for recovery confirmation")
 		return
 	}
 
@@ -7765,6 +7797,7 @@ func (m *Manager) checkPBSOffline(pbs models.PBSInstance) {
 	defer m.mu.Unlock()
 
 	// Check if PBS offline alerts are disabled via disableConnectivity flag
+	delete(m.offlineRecoveryConfirmations, alertID)
 	if override, exists := m.config.Overrides[pbs.ID]; exists && (override.Disabled || override.DisableConnectivity) {
 		// PBS connectivity alerts are disabled, clear any existing alert and return
 		if _, alertExists := m.activeAlerts[alertID]; alertExists {
@@ -7852,6 +7885,18 @@ func (m *Manager) clearPBSOfflineAlert(pbs models.PBSInstance) {
 	// Check if offline alert exists
 	alert, exists := m.activeAlerts[alertID]
 	if !exists {
+		delete(m.offlineRecoveryConfirmations, alertID)
+		return
+	}
+
+	const requiredRecoveryCount = 3
+	recoveryCount, confirmed := m.confirmOfflineRecoveryNoLock(alertID, requiredRecoveryCount)
+	if !confirmed {
+		log.Debug().
+			Str("pbs", pbs.Name).
+			Int("confirmations", recoveryCount).
+			Int("required", requiredRecoveryCount).
+			Msg("PBS appears back online, waiting for recovery confirmation")
 		return
 	}
 
@@ -7883,6 +7928,7 @@ func (m *Manager) checkPMGOffline(pmg models.PMGInstance) {
 	defer m.mu.Unlock()
 
 	// Check if PMG offline alerts are disabled via disableConnectivity flag
+	delete(m.offlineRecoveryConfirmations, alertID)
 	if override, exists := m.config.Overrides[pmg.ID]; exists && (override.Disabled || override.DisableConnectivity) {
 		// PMG connectivity alerts are disabled, clear any existing alert and return
 		if _, alertExists := m.activeAlerts[alertID]; alertExists {
@@ -7970,6 +8016,18 @@ func (m *Manager) clearPMGOfflineAlert(pmg models.PMGInstance) {
 	// Check if offline alert exists
 	alert, exists := m.activeAlerts[alertID]
 	if !exists {
+		delete(m.offlineRecoveryConfirmations, alertID)
+		return
+	}
+
+	const requiredRecoveryCount = 3
+	recoveryCount, confirmed := m.confirmOfflineRecoveryNoLock(alertID, requiredRecoveryCount)
+	if !confirmed {
+		log.Debug().
+			Str("pmg", pmg.Name).
+			Int("confirmations", recoveryCount).
+			Int("required", requiredRecoveryCount).
+			Msg("PMG appears back online, waiting for recovery confirmation")
 		return
 	}
 
@@ -9009,6 +9067,7 @@ func (m *Manager) checkStorageOffline(storage models.Storage) {
 	defer m.mu.Unlock()
 
 	// Check if storage offline alerts are disabled
+	delete(m.offlineRecoveryConfirmations, alertID)
 	if override, exists, _ := findStorageOverride(m.config.Overrides, storage); exists && override.Disabled {
 		// Storage alerts are disabled, clear any existing alert and return
 		if _, alertExists := m.activeAlerts[alertID]; alertExists {
@@ -9097,6 +9156,18 @@ func (m *Manager) clearStorageOfflineAlert(storage models.Storage) {
 	// Check if offline alert exists
 	alert, exists := m.activeAlerts[alertID]
 	if !exists {
+		delete(m.offlineRecoveryConfirmations, alertID)
+		return
+	}
+
+	const requiredRecoveryCount = 2
+	recoveryCount, confirmed := m.confirmOfflineRecoveryNoLock(alertID, requiredRecoveryCount)
+	if !confirmed {
+		log.Debug().
+			Str("storage", storage.Name).
+			Int("confirmations", recoveryCount).
+			Int("required", requiredRecoveryCount).
+			Msg("Storage appears back online, waiting for recovery confirmation")
 		return
 	}
 
@@ -10158,6 +10229,7 @@ func (m *Manager) ClearActiveAlerts() {
 	m.alertRateLimit = make(map[string][]time.Time)
 	m.nodeOfflineCount = make(map[string]int)
 	m.offlineConfirmations = make(map[string]int)
+	m.offlineRecoveryConfirmations = make(map[string]int)
 	m.dockerOfflineCount = make(map[string]int)
 	m.dockerStateConfirm = make(map[string]int)
 	m.dockerRestartTracking = make(map[string]*dockerRestartRecord)
@@ -10271,6 +10343,14 @@ func (m *Manager) cleanupStaleMaps() {
 		}
 		if !hasRelatedAlert {
 			delete(m.offlineConfirmations, resourceID)
+			cleaned++
+		}
+	}
+
+	// Clean up recovery confirmation counts for alerts that are no longer active
+	for alertID := range m.offlineRecoveryConfirmations {
+		if _, exists := m.activeAlerts[alertID]; !exists {
+			delete(m.offlineRecoveryConfirmations, alertID)
 			cleaned++
 		}
 	}

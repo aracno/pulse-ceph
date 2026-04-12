@@ -5184,6 +5184,20 @@ func TestClearStorageOfflineAlert(t *testing.T) {
 		})
 
 		m.clearStorageOfflineAlert(storage)
+		m.mu.RLock()
+		_, alertStillActive := m.activeAlerts[alertID]
+		m.mu.RUnlock()
+		if !alertStillActive {
+			t.Fatal("expected alert to remain active until recovery is confirmed")
+		}
+
+		select {
+		case <-resolvedCh:
+			t.Fatal("expected no resolved callback before recovery is confirmed")
+		default:
+		}
+
+		m.clearStorageOfflineAlert(storage)
 
 		m.mu.RLock()
 		_, alertExists := m.activeAlerts[alertID]
@@ -8142,6 +8156,28 @@ func TestClearNodeOfflineAlert(t *testing.T) {
 
 		node := models.Node{ID: "node1", Name: "Node 1", Instance: "pve1"}
 		m.clearNodeOfflineAlert(node)
+		m.mu.RLock()
+		_, alertStillActive := m.activeAlerts["node-offline-node1"]
+		m.mu.RUnlock()
+		if !alertStillActive {
+			t.Fatal("expected alert to remain active until recovery is confirmed")
+		}
+
+		select {
+		case <-resolvedCh:
+			t.Fatal("expected no resolved callback before recovery is confirmed")
+		default:
+		}
+
+		m.clearNodeOfflineAlert(node)
+		m.mu.RLock()
+		_, alertStillActive = m.activeAlerts["node-offline-node1"]
+		m.mu.RUnlock()
+		if !alertStillActive {
+			t.Fatal("expected alert to remain active until final recovery confirmation")
+		}
+
+		m.clearNodeOfflineAlert(node)
 
 		m.mu.RLock()
 		_, alertExists := m.activeAlerts["node-offline-node1"]
@@ -8194,6 +8230,7 @@ func TestClearOfflineAlertNoDeadlock(t *testing.T) {
 					Type:      "offline",
 					StartTime: time.Now().Add(-5 * time.Minute),
 				}
+				m.offlineRecoveryConfirmations["node-offline-node1"] = 2
 				m.mu.Unlock()
 			},
 			clearFn: func(m *Manager) {
@@ -8209,6 +8246,7 @@ func TestClearOfflineAlertNoDeadlock(t *testing.T) {
 					Type:      "offline",
 					StartTime: time.Now().Add(-5 * time.Minute),
 				}
+				m.offlineRecoveryConfirmations["pbs-offline-pbs1"] = 2
 				m.mu.Unlock()
 			},
 			clearFn: func(m *Manager) {
@@ -8224,6 +8262,7 @@ func TestClearOfflineAlertNoDeadlock(t *testing.T) {
 					Type:      "offline",
 					StartTime: time.Now().Add(-5 * time.Minute),
 				}
+				m.offlineRecoveryConfirmations["pmg-offline-pmg1"] = 2
 				m.mu.Unlock()
 			},
 			clearFn: func(m *Manager) {
@@ -8239,6 +8278,7 @@ func TestClearOfflineAlertNoDeadlock(t *testing.T) {
 					Type:      "offline",
 					StartTime: time.Now().Add(-5 * time.Minute),
 				}
+				m.offlineRecoveryConfirmations["storage-offline-stor1"] = 1
 				m.mu.Unlock()
 			},
 			clearFn: func(m *Manager) {
@@ -8343,6 +8383,28 @@ func TestClearPBSOfflineAlert(t *testing.T) {
 
 		pbs := models.PBSInstance{ID: "pbs1", Name: "PBS 1", Host: "pbs.local"}
 		m.clearPBSOfflineAlert(pbs)
+		m.mu.RLock()
+		_, alertStillActive := m.activeAlerts["pbs-offline-pbs1"]
+		m.mu.RUnlock()
+		if !alertStillActive {
+			t.Fatal("expected alert to remain active until recovery is confirmed")
+		}
+
+		select {
+		case <-resolvedCh:
+			t.Fatal("expected no resolved callback before recovery is confirmed")
+		default:
+		}
+
+		m.clearPBSOfflineAlert(pbs)
+		m.mu.RLock()
+		_, alertStillActive = m.activeAlerts["pbs-offline-pbs1"]
+		m.mu.RUnlock()
+		if !alertStillActive {
+			t.Fatal("expected alert to remain active until final recovery confirmation")
+		}
+
+		m.clearPBSOfflineAlert(pbs)
 
 		m.mu.RLock()
 		_, alertExists := m.activeAlerts["pbs-offline-pbs1"]
@@ -8425,6 +8487,28 @@ func TestClearPMGOfflineAlert(t *testing.T) {
 		m.mu.Unlock()
 
 		pmg := models.PMGInstance{ID: "pmg1", Name: "PMG 1", Host: "pmg.local"}
+		m.clearPMGOfflineAlert(pmg)
+		m.mu.RLock()
+		_, alertStillActive := m.activeAlerts["pmg-offline-pmg1"]
+		m.mu.RUnlock()
+		if !alertStillActive {
+			t.Fatal("expected alert to remain active until recovery is confirmed")
+		}
+
+		select {
+		case <-resolvedCh:
+			t.Fatal("expected no resolved callback before recovery is confirmed")
+		default:
+		}
+
+		m.clearPMGOfflineAlert(pmg)
+		m.mu.RLock()
+		_, alertStillActive = m.activeAlerts["pmg-offline-pmg1"]
+		m.mu.RUnlock()
+		if !alertStillActive {
+			t.Fatal("expected alert to remain active until final recovery confirmation")
+		}
+
 		m.clearPMGOfflineAlert(pmg)
 
 		m.mu.RLock()
@@ -13371,6 +13455,22 @@ func TestCheckNode(t *testing.T) {
 			ConnectionHealth: "connected",
 		}
 		m.CheckNode(node)
+		m.mu.RLock()
+		_, alertStillActive := m.activeAlerts["node-offline-node1"]
+		m.mu.RUnlock()
+		if !alertStillActive {
+			t.Fatal("expected offline alert to remain until recovery is confirmed")
+		}
+
+		m.CheckNode(node)
+		m.mu.RLock()
+		_, alertStillActive = m.activeAlerts["node-offline-node1"]
+		m.mu.RUnlock()
+		if !alertStillActive {
+			t.Fatal("expected offline alert to remain until final recovery confirmation")
+		}
+
+		m.CheckNode(node)
 
 		m.mu.RLock()
 		_, alertExists := m.activeAlerts["node-offline-node1"]
@@ -15430,6 +15530,22 @@ func TestCheckPBSComprehensive(t *testing.T) {
 		}
 
 		m.CheckPBS(pbs)
+		m.mu.RLock()
+		_, offlineStillActive := m.activeAlerts["pbs-offline-pbs1"]
+		m.mu.RUnlock()
+		if !offlineStillActive {
+			t.Fatal("expected offline alert to remain until recovery is confirmed")
+		}
+
+		m.CheckPBS(pbs)
+		m.mu.RLock()
+		_, offlineStillActive = m.activeAlerts["pbs-offline-pbs1"]
+		m.mu.RUnlock()
+		if !offlineStillActive {
+			t.Fatal("expected offline alert to remain until final recovery confirmation")
+		}
+
+		m.CheckPBS(pbs)
 
 		m.mu.RLock()
 		_, offlineExists := m.activeAlerts["pbs-offline-pbs1"]
@@ -15441,6 +15557,89 @@ func TestCheckPBSComprehensive(t *testing.T) {
 		}
 		if confirmExists {
 			t.Error("expected offline confirmation to be cleared")
+		}
+	})
+
+	t.Run("transient healthy poll does not re-arm offline alert notifications", func(t *testing.T) {
+		m := newTestManager(t)
+
+		alertsCh := make(chan string, 2)
+		resolvedCh := make(chan string, 1)
+
+		m.mu.Lock()
+		m.config.ActivationState = ActivationActive
+		m.offlineConfirmations["pbs1"] = 2
+		m.mu.Unlock()
+
+		m.SetAlertCallback(func(alert *Alert) {
+			if alert != nil {
+				alertsCh <- alert.ID
+			}
+		})
+		m.SetResolvedCallback(func(alertID string) {
+			resolvedCh <- alertID
+		})
+
+		offlinePBS := models.PBSInstance{
+			ID:     "pbs1",
+			Name:   "testpbs",
+			Status: "offline",
+		}
+		onlinePBS := models.PBSInstance{
+			ID:               "pbs1",
+			Name:             "testpbs",
+			Status:           "online",
+			ConnectionHealth: "healthy",
+		}
+
+		m.CheckPBS(offlinePBS)
+		select {
+		case alertID := <-alertsCh:
+			if alertID != "pbs-offline-pbs1" {
+				t.Fatalf("expected initial PBS offline notification, got %q", alertID)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected initial PBS offline notification")
+		}
+
+		m.CheckPBS(onlinePBS)
+
+		m.mu.RLock()
+		_, stillActive := m.activeAlerts["pbs-offline-pbs1"]
+		recoveryCount := m.offlineRecoveryConfirmations["pbs-offline-pbs1"]
+		m.mu.RUnlock()
+
+		if !stillActive {
+			t.Fatal("expected transient healthy poll to keep the offline alert active")
+		}
+		if recoveryCount != 1 {
+			t.Fatalf("expected recovery confirmation count 1 after transient healthy poll, got %d", recoveryCount)
+		}
+
+		select {
+		case resolvedID := <-resolvedCh:
+			t.Fatalf("expected no recovery notification from a single healthy poll, got %q", resolvedID)
+		default:
+		}
+
+		m.CheckPBS(offlinePBS)
+
+		m.mu.RLock()
+		_, stillActive = m.activeAlerts["pbs-offline-pbs1"]
+		_, recoveryTracked := m.offlineRecoveryConfirmations["pbs-offline-pbs1"]
+		m.mu.RUnlock()
+
+		if !stillActive {
+			t.Fatal("expected offline alert to remain active after connectivity drops again")
+		}
+		if recoveryTracked {
+			t.Fatal("expected transient recovery tracking to reset once PBS is offline again")
+		}
+
+		select {
+		case alertID := <-alertsCh:
+			t.Fatalf("expected no duplicate offline notification while alert stays active, got %q", alertID)
+		case <-time.After(200 * time.Millisecond):
 		}
 	})
 }
@@ -15692,6 +15891,22 @@ func TestCheckPMGComprehensive(t *testing.T) {
 			Name:             "testpmg",
 			Status:           "online",
 			ConnectionHealth: "healthy",
+		}
+
+		m.CheckPMG(pmg)
+		m.mu.RLock()
+		_, offlineStillActive := m.activeAlerts["pmg-offline-pmg1"]
+		m.mu.RUnlock()
+		if !offlineStillActive {
+			t.Fatal("expected offline alert to remain until recovery is confirmed")
+		}
+
+		m.CheckPMG(pmg)
+		m.mu.RLock()
+		_, offlineStillActive = m.activeAlerts["pmg-offline-pmg1"]
+		m.mu.RUnlock()
+		if !offlineStillActive {
+			t.Fatal("expected offline alert to remain until final recovery confirmation")
 		}
 
 		m.CheckPMG(pmg)
@@ -16047,6 +16262,14 @@ func TestCheckStorageComprehensive(t *testing.T) {
 			ID:     "storage1",
 			Name:   "teststorage",
 			Status: "active",
+		}
+
+		m.CheckStorage(storage)
+		m.mu.RLock()
+		_, offlineStillActive := m.activeAlerts["storage-offline-storage1"]
+		m.mu.RUnlock()
+		if !offlineStillActive {
+			t.Fatal("expected offline alert to remain until recovery is confirmed")
 		}
 
 		m.CheckStorage(storage)
