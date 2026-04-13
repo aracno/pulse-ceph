@@ -72,6 +72,44 @@ type CephMgrMap struct {
 	Standbys   []string `json:"standbys"`
 }
 
+func (m *CephMgrMap) UnmarshalJSON(data []byte) error {
+	type rawCephMgrMap struct {
+		Available  bool              `json:"available"`
+		NumMgrs    int               `json:"num_mgrs"`
+		ActiveName string            `json:"active_name"`
+		Standbys   []json.RawMessage `json:"standbys"`
+	}
+
+	var raw rawCephMgrMap
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	m.Available = raw.Available
+	m.NumMgrs = raw.NumMgrs
+	m.ActiveName = raw.ActiveName
+	m.Standbys = m.Standbys[:0]
+
+	for _, standby := range raw.Standbys {
+		var name string
+		if err := json.Unmarshal(standby, &name); err == nil {
+			if name != "" {
+				m.Standbys = append(m.Standbys, name)
+			}
+			continue
+		}
+
+		var named struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(standby, &named); err == nil && named.Name != "" {
+			m.Standbys = append(m.Standbys, named.Name)
+		}
+	}
+
+	return nil
+}
+
 // CephOSDMap captures summary statistics about OSDs.
 type CephOSDMap struct {
 	NumOSDs   int `json:"num_osds"`

@@ -68,6 +68,62 @@ func TestGetCephStatus(t *testing.T) {
 	}
 }
 
+func TestGetCephStatusHandlesStandbyObjects(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/ceph/status" {
+			http.NotFound(w, r)
+			return
+		}
+		resp := map[string]interface{}{
+			"data": map[string]interface{}{
+				"fsid": "fsid-1",
+				"health": map[string]interface{}{
+					"status":  "HEALTH_OK",
+					"summary": []map[string]interface{}{},
+					"checks":  map[string]interface{}{},
+				},
+				"servicemap": map[string]interface{}{
+					"services": map[string]interface{}{},
+				},
+				"monmap": map[string]interface{}{
+					"num_mons": 3,
+				},
+				"mgrmap": map[string]interface{}{
+					"available":   true,
+					"num_mgrs":    2,
+					"active_name": "mgr.node1",
+					"standbys": []map[string]interface{}{
+						{"name": "mgr.node2"},
+						{"name": "mgr.node3"},
+					},
+				},
+				"osdmap": map[string]interface{}{
+					"num_osds":    1,
+					"num_up_osds": 1,
+					"num_in_osds": 1,
+				},
+				"pgmap": map[string]interface{}{
+					"num_pgs": 5,
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := &Client{baseURL: server.URL, httpClient: server.Client()}
+	status, err := client.GetCephStatus(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(status.MgrMap.Standbys) != 2 {
+		t.Fatalf("MgrMap.Standbys length = %d, want 2", len(status.MgrMap.Standbys))
+	}
+	if status.MgrMap.Standbys[0] != "mgr.node2" || status.MgrMap.Standbys[1] != "mgr.node3" {
+		t.Fatalf("MgrMap.Standbys = %#v, want [mgr.node2 mgr.node3]", status.MgrMap.Standbys)
+	}
+}
+
 func TestGetCephDF(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/cluster/ceph/df" {
