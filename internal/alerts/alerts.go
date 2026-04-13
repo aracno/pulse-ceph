@@ -2495,22 +2495,8 @@ func (m *Manager) CheckGuest(guest interface{}, instanceName string) {
 			m.clearGuestPoweredOffAlert(guestID, name)
 		}
 
-		// Clear all resource metric alerts (cpu, memory, disk, etc.) for non-running guests
-		m.mu.Lock()
-		alertsCleared := 0
-		for alertID, alert := range m.activeAlerts {
-			// Only clear resource metric alerts, not powered-off alerts
-			if alert.ResourceID == guestID && alert.Type != "powered-off" {
-				m.clearAlertNoLock(alertID)
-				alertsCleared++
-				log.Debug().
-					Str("alertID", alertID).
-					Str("guest", name).
-					Str("status", status).
-					Msg("Cleared metric alert for non-running guest")
-			}
-		}
-		m.mu.Unlock()
+		// Clear all resource metric alerts (cpu, memory, disk, etc.) for non-running guests.
+		alertsCleared := m.clearGuestMetricAlerts(guestID)
 
 		if alertsCleared > 0 {
 			log.Debug().
@@ -2518,6 +2504,7 @@ func (m *Manager) CheckGuest(guest interface{}, instanceName string) {
 				Str("status", status).
 				Int("alertsCleared", alertsCleared).
 				Msg("Cleared metric alerts for non-running guest")
+			m.saveActiveAlertsAsync("guest-not-running")
 		}
 		return
 	}
@@ -2540,17 +2527,13 @@ func (m *Manager) CheckGuest(guest interface{}, instanceName string) {
 
 	// If alerts are disabled for this guest, clear any existing alerts and return
 	if thresholds.Disabled {
-		m.mu.Lock()
-		for alertID, alert := range m.activeAlerts {
-			if alert.ResourceID == guestID {
-				m.clearAlertNoLock(alertID)
-				log.Info().
-					Str("alertID", alertID).
-					Str("guest", name).
-					Msg("Cleared alert - guest has alerts disabled")
-			}
+		if alertsCleared := m.clearGuestMetricAlerts(guestID); alertsCleared > 0 {
+			log.Info().
+				Str("guest", name).
+				Int("alertsCleared", alertsCleared).
+				Msg("Cleared guest metric alerts because alerts are disabled")
+			m.saveActiveAlertsAsync("guest-alerts-disabled")
 		}
-		m.mu.Unlock()
 		return
 	}
 
@@ -2612,6 +2595,7 @@ func (m *Manager) CheckGuest(guest interface{}, instanceName string) {
 			seenDisks[sanitizedKey] = struct{}{}
 
 			perDiskResourceID := fmt.Sprintf("%s-disk-%s", guestID, sanitizedKey)
+			seenDisks[perDiskResourceID] = struct{}{}
 			message := fmt.Sprintf("%s disk (%s) at %.1f%%", guestType, label, disk.Usage)
 
 			log.Debug().
@@ -2639,6 +2623,11 @@ func (m *Manager) CheckGuest(guest interface{}, instanceName string) {
 				MonitorOnly: monitorOnly,
 			})
 		}
+		if cleared := m.cleanupGuestDiskAlerts(guestID, seenDisks); cleared > 0 {
+			m.saveActiveAlertsAsync("guest-disk-set-changed")
+		}
+	} else if cleared := m.cleanupGuestDiskAlerts(guestID, nil); cleared > 0 {
+		m.saveActiveAlertsAsync("guest-disk-alerts-cleared")
 	}
 
 	// Check I/O metrics (convert bytes/s to MB/s) - checkMetric will skip if threshold is nil or <= 0
@@ -3581,6 +3570,74 @@ func (m *Manager) clearHostDiskAlerts(hostID string) {
 		}
 		m.clearAlertNoLock(alertID)
 	}
+}
+
+func (m *Manager) clearGuestMetricAlerts(guestID string, metrics ...string) int {
+	if guestID == "" {
+		return 0
+	}
+
+	allowedMetrics := make(map[string]struct{}, len(metrics))
+	for _, metric := range metrics {
+		if metric == "" {
+			continue
+		}
+		allowedMetrics[metric] = struct{}{}
+	}
+
+	perDiskPrefix := fmt.Sprintf("%s-disk-", guestID)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cleared := 0
+	for alertID, alert := range m.activeAlerts {
+		if alert == nil || alert.Type == "powered-off" {
+			continue
+		}
+		if alert.ResourceID != guestID && !strings.HasPrefix(alert.ResourceID, perDiskPrefix) {
+			continue
+		}
+		if len(allowedMetrics) > 0 {
+			if _, ok := allowedMetrics[alert.Type]; !ok {
+				continue
+			}
+		}
+		m.clearAlertNoLock(alertID)
+		cleared++
+	}
+
+	return cleared
+}
+
+func (m *Manager) cleanupGuestDiskAlerts(guestID string, seen map[string]struct{}) int {
+	if guestID == "" {
+		return 0
+	}
+
+	prefix := fmt.Sprintf("%s-disk-", guestID)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cleared := 0
+	for alertID, alert := range m.activeAlerts {
+		if alert == nil {
+			continue
+		}
+		if !strings.HasPrefix(alert.ResourceID, prefix) {
+			continue
+		}
+		if seen != nil {
+			if _, exists := seen[alert.ResourceID]; exists {
+				continue
+			}
+		}
+		m.clearAlertNoLock(alertID)
+		cleared++
+	}
+
+	return cleared
 }
 
 func (m *Manager) clearVendorManagedHostRAIDAlerts(host models.Host) {
