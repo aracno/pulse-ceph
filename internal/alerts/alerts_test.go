@@ -1436,6 +1436,135 @@ func TestCheckBackupsVMIDCollisionNoNamespace(t *testing.T) {
 	}
 }
 
+func TestCheckBackupsPbsTypeMismatchCreatesOrphanedAlert(t *testing.T) {
+	m := newTestManager(t)
+	m.ClearActiveAlerts()
+
+	m.mu.Lock()
+	m.config.Enabled = true
+	m.config.BackupDefaults = BackupAlertConfig{
+		Enabled:      true,
+		WarningDays:  3,
+		CriticalDays: 5,
+	}
+	m.mu.Unlock()
+
+	now := time.Now()
+	pbsBackups := []models.PBSBackup{
+		{
+			ID:         "pbs-vm-101",
+			Instance:   "pbs-main",
+			Datastore:  "backup-store",
+			BackupType: "vm",
+			VMID:       "101",
+			BackupTime: now.Add(-30 * 24 * time.Hour),
+		},
+	}
+
+	guestKey := BuildGuestKey("pve1", "node1", 101)
+	guestsByKey := map[string]GuestLookup{
+		guestKey: {
+			ResourceID: "lxc/101",
+			Name:       "ct-101",
+			Instance:   "pve1",
+			Node:       "node1",
+			Type:       "lxc",
+			VMID:       101,
+		},
+	}
+	guestsByVMID := map[string][]GuestLookup{
+		"101": {guestsByKey[guestKey]},
+	}
+
+	m.CheckBackups(nil, pbsBackups, nil, guestsByKey, guestsByVMID, nil)
+
+	orphanedID := "backup-orphaned-" + sanitizeAlertKey("pbs:pbs-main:vm:101")
+	ageID := "backup-age-" + sanitizeAlertKey("pbs:pbs-main:vm:101")
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	alert, exists := m.activeAlerts[orphanedID]
+	if !exists {
+		var keys []string
+		for k := range m.activeAlerts {
+			keys = append(keys, k)
+		}
+		t.Fatalf("expected orphaned alert %q, found keys: %v", orphanedID, keys)
+	}
+	if alert.Type != "backup-orphaned" {
+		t.Fatalf("expected backup-orphaned alert, got %s", alert.Type)
+	}
+	if _, exists := m.activeAlerts[ageID]; exists {
+		t.Fatalf("expected no backup-age alert for mismatched live guest type")
+	}
+}
+
+func TestCheckBackupsStorageTypeMismatchCreatesOrphanedAlert(t *testing.T) {
+	m := newTestManager(t)
+	m.ClearActiveAlerts()
+
+	m.mu.Lock()
+	m.config.Enabled = true
+	m.config.BackupDefaults = BackupAlertConfig{
+		Enabled:      true,
+		WarningDays:  3,
+		CriticalDays: 5,
+	}
+	m.mu.Unlock()
+
+	now := time.Now()
+	storageBackups := []models.StorageBackup{
+		{
+			ID:       "pve1-node1-101-backup",
+			Storage:  "local",
+			Node:     "node1",
+			Instance: "pve1",
+			Type:     "qemu",
+			VMID:     101,
+			Time:     now.Add(-30 * 24 * time.Hour),
+		},
+	}
+
+	guestKey := BuildGuestKey("pve1", "node1", 101)
+	guestsByKey := map[string]GuestLookup{
+		guestKey: {
+			ResourceID: "lxc/101",
+			Name:       "ct-101",
+			Instance:   "pve1",
+			Node:       "node1",
+			Type:       "lxc",
+			VMID:       101,
+		},
+	}
+	guestsByVMID := map[string][]GuestLookup{
+		"101": {guestsByKey[guestKey]},
+	}
+
+	m.CheckBackups(storageBackups, nil, nil, guestsByKey, guestsByVMID, nil)
+
+	orphanedID := "backup-orphaned-" + sanitizeAlertKey(guestKey)
+	ageID := "backup-age-" + sanitizeAlertKey(guestKey)
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	alert, exists := m.activeAlerts[orphanedID]
+	if !exists {
+		var keys []string
+		for k := range m.activeAlerts {
+			keys = append(keys, k)
+		}
+		t.Fatalf("expected orphaned alert %q, found keys: %v", orphanedID, keys)
+	}
+	if alert.Type != "backup-orphaned" {
+		t.Fatalf("expected backup-orphaned alert, got %s", alert.Type)
+	}
+	if _, exists := m.activeAlerts[ageID]; exists {
+		t.Fatalf("expected no backup-age alert for mismatched live guest type")
+	}
+}
+
 func TestCheckBackupsHandlesPmgBackups(t *testing.T) {
 	m := newTestManager(t)
 	m.ClearActiveAlerts()

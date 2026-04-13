@@ -5507,6 +5507,43 @@ func BuildGuestKey(instance, node string, vmid int) string {
 	return fmt.Sprintf("%s:%s:%d", instance, node, vmid)
 }
 
+func canonicalBackupGuestType(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "vm", "qemu":
+		return "vm"
+	case "ct", "lxc", "container":
+		return "ct"
+	default:
+		return ""
+	}
+}
+
+func guestMatchesBackupType(guest GuestLookup, backupType string) bool {
+	backupKind := canonicalBackupGuestType(backupType)
+	if backupKind == "" {
+		return true
+	}
+	guestKind := canonicalBackupGuestType(guest.Type)
+	if guestKind == "" {
+		return false
+	}
+	return guestKind == backupKind
+}
+
+func filterGuestsByBackupType(guests []GuestLookup, backupType string) []GuestLookup {
+	if canonicalBackupGuestType(backupType) == "" {
+		return guests
+	}
+
+	filtered := make([]GuestLookup, 0, len(guests))
+	for _, guest := range guests {
+		if guestMatchesBackupType(guest, backupType) {
+			filtered = append(filtered, guest)
+		}
+	}
+	return filtered
+}
+
 func isGuestMetricResourceType(resourceType string) bool {
 	switch strings.TrimSpace(resourceType) {
 	case "VM", "Container":
@@ -5961,6 +5998,9 @@ func (m *Manager) CheckBackups(
 			vmid = strconv.Itoa(backup.VMID)
 		}
 		info := guestsByKey[key]
+		if !guestMatchesBackupType(info, backup.Type) {
+			info = GuestLookup{}
+		}
 		displayName := info.Name
 		if displayName == "" {
 			displayName = fmt.Sprintf("%s-%d", sanitizeAlertKey(backup.Node), backup.VMID)
@@ -5998,13 +6038,14 @@ func (m *Manager) CheckBackups(
 		var node string
 
 		if exists && len(guests) > 0 {
+			typedGuests := filterGuestsByBackupType(guests, backup.BackupType)
 			// If we have exactly one match, use it directly
 			// If we have multiple matches, try to disambiguate using the PBS namespace
-			if len(guests) == 1 {
-				info = guests[0]
+			if len(typedGuests) == 1 {
+				info = typedGuests[0]
 			} else if backup.Namespace != "" {
 				// Try to match namespace to instance name
-				for _, g := range guests {
+				for _, g := range typedGuests {
 					if namespaceMatchesInstance(backup.Namespace, g.Instance) {
 						info = g
 						break
@@ -6177,6 +6218,9 @@ func (m *Manager) CheckBackups(
 					if g.ResourceID == "" {
 						continue
 					}
+					if !guestMatchesBackupType(g, record.backupType) {
+						continue
+					}
 					if record.source == "PVE storage" && g.Instance != record.instance {
 						continue
 					}
@@ -6185,7 +6229,7 @@ func (m *Manager) CheckBackups(
 				}
 			}
 			if !existsInInventory {
-				if g, ok := guestsByKey[record.key]; ok && g.ResourceID != "" {
+				if g, ok := guestsByKey[record.key]; ok && g.ResourceID != "" && guestMatchesBackupType(g, record.backupType) {
 					existsInInventory = true
 				}
 			}
