@@ -2724,16 +2724,8 @@ install_additional_agent_binaries() {
         return
     fi
 
-    local docker_targets=("linux-amd64" "linux-arm64" "linux-armv7")
     local host_targets=("linux-amd64" "linux-arm64" "linux-armv7" "linux-armv6" "linux-386" "darwin-amd64" "darwin-arm64" "windows-amd64" "windows-arm64" "windows-386")
     local unified_targets=("linux-amd64" "linux-arm64" "linux-armv7" "linux-armv6" "linux-386" "darwin-amd64" "darwin-arm64" "windows-amd64" "windows-arm64" "windows-386")
-
-    local docker_missing_targets=()
-    for target in "${docker_targets[@]}"; do
-        if [[ ! -f "$INSTALL_DIR/bin/pulse-docker-agent-$target" ]]; then
-            docker_missing_targets+=("$target")
-        fi
-    done
 
     local host_missing_targets=()
     for target in "${host_targets[@]}"; do
@@ -2761,83 +2753,25 @@ install_additional_agent_binaries() {
         fi
     done
 
-    if [[ ${#docker_missing_targets[@]} -eq 0 ]] && [[ ${#host_missing_targets[@]} -eq 0 ]] && [[ ${#unified_missing_targets[@]} -eq 0 ]]; then
+    if [[ ${#host_missing_targets[@]} -eq 0 ]] && [[ ${#unified_missing_targets[@]} -eq 0 ]]; then
+        if [[ $local_host_installed -eq 1 ]]; then
+            print_success "Additional host agent binaries installed"
+        fi
+        if [[ $local_unified_installed -eq 1 ]]; then
+            print_success "Unified agent binaries installed"
+        fi
         return
     fi
 
-    local universal_url="https://github.com/$GITHUB_REPO/releases/download/$version/pulse-${version}.tar.gz"
-    local universal_tar="/tmp/pulse-universal-${version}.tar.gz"
-
-    print_info "Downloading universal agent bundle for cross-architecture support..."
-
-    if command -v curl >/dev/null 2>&1; then
-        if ! curl -fsSL --connect-timeout 10 --max-time 300 -o "$universal_tar" "$universal_url"; then
-            print_warn "Failed to download universal agent bundle"
-            rm -f "$universal_tar"
-            return
-        fi
-    elif command -v wget >/dev/null 2>&1; then
-        if ! wget -q --timeout=300 -O "$universal_tar" "$universal_url"; then
-            print_warn "Failed to download universal agent bundle"
-            rm -f "$universal_tar"
-            return
-        fi
-    else
-        print_warn "Cannot download universal agent bundle (curl or wget not available)"
-        return
-    fi
-
-    local temp_dir
-    temp_dir=$(mktemp -d -t pulse-universal-XXXXXX)
-    if ! tar -xzf "$universal_tar" -C "$temp_dir"; then
-        print_warn "Failed to extract universal agent bundle"
-        rm -f "$universal_tar"
-        rm -rf "$temp_dir"
-        return
-    fi
-
-    local docker_installed=0
-    local bundle_host_installed=0
-
-    # Install Docker agent binaries
-    for agent_file in "$temp_dir"/bin/pulse-docker-agent-linux-*; do
-        if [[ -f "$agent_file" ]]; then
-            local base
-            base=$(basename "$agent_file")
-            cp -f "$agent_file" "$INSTALL_DIR/bin/$base"
-            cp -f "$agent_file" "$INSTALL_DIR/$base"
-            chmod +x "$INSTALL_DIR/bin/$base" "$INSTALL_DIR/$base"
-            chown pulse:pulse "$INSTALL_DIR/bin/$base" "$INSTALL_DIR/$base"
-            docker_installed=1
-        fi
-    done
-
-    # Install host agent binaries (preserve symlinks for Windows targets)
-    if copy_host_agent_binaries_from_dir "$temp_dir"; then
-        bundle_host_installed=1
-    fi
-
-    # Install unified agent binaries (preserve symlinks for Windows targets)
-    local bundle_unified_installed=0
-    if copy_unified_agent_binaries_from_dir "$temp_dir"; then
-        bundle_unified_installed=1
-    fi
-
-    if [[ $docker_installed -eq 1 ]]; then
-        print_success "Additional Docker agent binaries installed"
-    fi
-    if [[ $local_host_installed -eq 1 || $bundle_host_installed -eq 1 ]]; then
+    if [[ $local_host_installed -eq 1 ]]; then
         print_success "Additional host agent binaries installed"
     fi
-    if [[ $local_unified_installed -eq 1 || $bundle_unified_installed -eq 1 ]]; then
+    if [[ $local_unified_installed -eq 1 ]]; then
         print_success "Unified agent binaries installed"
     fi
-    if [[ $docker_installed -eq 0 ]] && [[ $local_host_installed -eq 0 ]] && [[ $bundle_host_installed -eq 0 ]] && [[ $local_unified_installed -eq 0 ]] && [[ $bundle_unified_installed -eq 0 ]]; then
-        print_warn "No agent binaries found in universal bundle"
-    fi
-
-    rm -f "$universal_tar"
-    rm -rf "$temp_dir"
+    print_info "Skipping eager cross-architecture agent bundle download during install"
+    print_info "Missing host and unified agent binaries will be fetched on demand when requested"
+    return 0
 }
 
 deploy_agent_scripts() {

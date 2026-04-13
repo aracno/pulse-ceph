@@ -205,6 +205,65 @@ test_installer_runs_when_streamed_over_stdin() {
   return 0
 }
 
+test_install_additional_agent_binaries_copies_local_binaries_without_network() {
+  (
+    load_installer
+
+    local tmpdir source_dir
+    tmpdir="$(mktemp -d)"
+    source_dir="${tmpdir}/source"
+    INSTALL_DIR="${tmpdir}/opt/pulse"
+
+    mkdir -p "${source_dir}/bin" "${INSTALL_DIR}/bin"
+    printf 'host-agent\n' > "${source_dir}/bin/pulse-host-agent-linux-arm64"
+    printf 'unified-agent\n' > "${source_dir}/bin/pulse-agent-linux-arm64"
+    chmod +x "${source_dir}/bin/pulse-host-agent-linux-arm64" "${source_dir}/bin/pulse-agent-linux-arm64"
+
+    local curl_calls=0
+    local wget_calls=0
+
+    chown() { :; }
+    curl() { curl_calls=$((curl_calls + 1)); return 99; }
+    wget() { wget_calls=$((wget_calls + 1)); return 99; }
+
+    install_additional_agent_binaries "v5.1.99" "${source_dir}"
+
+    [[ -x "${INSTALL_DIR}/bin/pulse-host-agent-linux-arm64" ]]
+    [[ -x "${INSTALL_DIR}/bin/pulse-agent-linux-arm64" ]]
+    [[ "${curl_calls}" -eq 0 ]]
+    [[ "${wget_calls}" -eq 0 ]]
+
+    rm -rf "${tmpdir}"
+  )
+}
+
+test_install_additional_agent_binaries_skips_network_when_local_extras_are_missing() {
+  (
+    load_installer
+
+    local tmpdir source_dir
+    tmpdir="$(mktemp -d)"
+    source_dir="${tmpdir}/source"
+    INSTALL_DIR="${tmpdir}/opt/pulse"
+
+    mkdir -p "${source_dir}/bin" "${INSTALL_DIR}/bin"
+
+    local curl_calls=0
+    local wget_calls=0
+
+    chown() { :; }
+    curl() { curl_calls=$((curl_calls + 1)); return 99; }
+    wget() { wget_calls=$((wget_calls + 1)); return 99; }
+
+    install_additional_agent_binaries "v5.1.99" "${source_dir}"
+
+    [[ "${curl_calls}" -eq 0 ]]
+    [[ "${wget_calls}" -eq 0 ]]
+
+    rm -rf "${tmpdir}"
+  )
+}
+
 main() {
   assert_success "infer_release_from_archive_name parses prerelease tarballs" test_infer_release_from_archive_name_supports_prerelease
   assert_success "download_pulse installs from local archive without network" test_download_pulse_installs_from_local_archive_without_network
@@ -212,6 +271,8 @@ main() {
   assert_success "wrong-arch archives fail before replacing the installed binary" test_install_pulse_archive_rejects_mismatched_arch_without_replacing_existing_binary
   assert_success "parse_args rejects archive with source builds" test_parse_args_rejects_archive_with_source
   assert_success "installer supports curl-pipe execution via bash stdin" test_installer_runs_when_streamed_over_stdin
+  assert_success "install_additional_agent_binaries copies local extras without network" test_install_additional_agent_binaries_copies_local_binaries_without_network
+  assert_success "install_additional_agent_binaries skips network when extras are missing" test_install_additional_agent_binaries_skips_network_when_local_extras_are_missing
 
   if (( failures > 0 )); then
     echo "Total failures: ${failures}" >&2
