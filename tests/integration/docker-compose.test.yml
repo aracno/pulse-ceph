@@ -22,6 +22,9 @@ services:
     environment:
       - PORT=8080
       - MOCK_BASE_URL=http://mock-github:8080
+      - MOCK_LATEST_VERSION=${MOCK_LATEST_VERSION:-v5.1.999}
+      - MOCK_PREVIOUS_VERSION=${MOCK_PREVIOUS_VERSION:-v5.1.998}
+      - MOCK_RC_VERSION=${MOCK_RC_VERSION:-v5.1.1000-rc.1}
       # Control test scenarios via environment variables
       - MOCK_CHECKSUM_ERROR=${MOCK_CHECKSUM_ERROR:-false}
       - MOCK_NETWORK_ERROR=${MOCK_NETWORK_ERROR:-false}
