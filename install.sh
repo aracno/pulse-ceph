@@ -25,7 +25,7 @@ ENABLE_AUTO_UPDATES=false
 FORCE_VERSION=""
 FORCE_CHANNEL=""
 ARCHIVE_OVERRIDE="${PULSE_ARCHIVE_PATH:-}"
-SOURCE_BRANCH="main"
+SOURCE_BRANCH="release/5.1"
 CURRENT_INSTALL_CTID=""
 CONTAINER_CREATED_FOR_CLEANUP=false
 BUILD_FROM_SOURCE_MARKER="$INSTALL_DIR/BUILD_FROM_SOURCE"
@@ -45,8 +45,11 @@ DEBIAN_TEMPLATE=""
 get_latest_release_from_redirect() {
     # Follow the GitHub "latest" redirect and extract the tag in a way that
     # tolerates intermediate redirects that omit /tag/ (issue #698).
-    local target_url="${1:-https://github.com/$GITHUB_REPO/releases/latest}"
+    local target_url="${1:-}"
     local effective_url=""
+    if [[ -z "$target_url" ]]; then
+        return 1
+    fi
     local curl_cmd=(curl -fsSL --connect-timeout 5 --max-time 10 -o /dev/null -w '%{url_effective}' "$target_url")
 
     if command -v timeout >/dev/null 2>&1; then
@@ -75,6 +78,62 @@ get_latest_release_from_redirect() {
 
     printf '%s\n' "$tag"
     return 0
+}
+
+maintenance_raw_url() {
+    local path="$1"
+    printf 'https://raw.githubusercontent.com/%s/%s/%s\n' "$GITHUB_REPO" "$SOURCE_BRANCH" "$path"
+}
+
+get_latest_maintenance_stable_version() {
+    local latest_version=""
+    local releases_json=""
+    local feed_xml=""
+    local api_url="https://api.github.com/repos/$GITHUB_REPO/releases"
+    local feed_url="https://github.com/$GITHUB_REPO/releases.atom"
+
+    if command -v timeout >/dev/null 2>&1; then
+        releases_json=$(timeout 10 curl -fsSL --connect-timeout 5 --max-time 10 "$api_url" 2>/dev/null || true)
+    else
+        releases_json=$(curl -fsSL --connect-timeout 5 --max-time 10 "$api_url" 2>/dev/null || true)
+    fi
+
+    if [[ -n "$releases_json" ]]; then
+        latest_version=$(printf '%s' "$releases_json" | grep -oE '"tag_name":[[:space:]]*"v5\.1\.[0-9]+"' | head -1 | sed -E 's/.*"([^"]+)"/\1/' || true)
+    fi
+
+    if [[ -z "$latest_version" ]]; then
+        if command -v timeout >/dev/null 2>&1; then
+            feed_xml=$(timeout 10 curl -fsSL --connect-timeout 5 --max-time 10 "$feed_url" 2>/dev/null || true)
+        else
+            feed_xml=$(curl -fsSL --connect-timeout 5 --max-time 10 "$feed_url" 2>/dev/null || true)
+        fi
+
+        if [[ -n "$feed_xml" ]]; then
+            latest_version=$(printf '%s' "$feed_xml" | grep -oE '<title>Pulse v5\.1\.[0-9]+</title>' | head -1 | sed -E 's#<title>Pulse (v[^<]+)</title>#\1#' || true)
+        fi
+    fi
+
+    printf '%s\n' "$latest_version"
+}
+
+resolve_bootstrap_install_script_url() {
+    local requested_version="${1:-}"
+
+    if [[ "$BUILD_FROM_SOURCE" == "true" ]]; then
+        maintenance_raw_url "install.sh"
+        return
+    fi
+
+    if [[ -n "$requested_version" ]]; then
+        if [[ "$requested_version" != v* ]]; then
+            requested_version="v${requested_version}"
+        fi
+        printf 'https://github.com/%s/releases/download/%s/install.sh\n' "$GITHUB_REPO" "$requested_version"
+        return
+    fi
+
+    maintenance_raw_url "install.sh"
 }
 
 detect_lxc_ctid() {
@@ -1403,7 +1462,8 @@ create_lxc_container() {
     local script_source="/tmp/pulse_install_$$.sh"
     if [[ "$0" == "bash" ]] || [[ ! -f "$0" ]]; then
         # We're being piped, download the script with retry logic
-        local download_url="https://github.com/rcourtman/Pulse/releases/latest/download/install.sh"
+        local download_url
+        download_url=$(resolve_bootstrap_install_script_url "$FORCE_VERSION")
         local download_success=false
         local download_error=""
         local max_retries=3
@@ -3120,9 +3180,9 @@ fi
 
 echo "Updating Pulse..."
 if [[ ${#extra_args[@]} -gt 0 ]]; then
-    curl -fsSL https://github.com/rcourtman/Pulse/releases/latest/download/install.sh | bash -s -- "${extra_args[@]}"
+    curl -fsSL "$(maintenance_raw_url "install.sh")" | bash -s -- "${extra_args[@]}"
 else
-    curl -fsSL https://github.com/rcourtman/Pulse/releases/latest/download/install.sh | bash
+    curl -fsSL "$(maintenance_raw_url "install.sh")" | bash
 fi
 
 echo ""
@@ -3143,7 +3203,8 @@ EOF
 }
 
 download_auto_update_script() {
-    local url="https://github.com/$GITHUB_REPO/releases/latest/download/pulse-auto-update.sh"
+    local url
+    url=$(maintenance_raw_url "scripts/pulse-auto-update.sh")
     local dest="/usr/local/bin/pulse-auto-update.sh"
     local attempts=0
     local max_attempts=3
@@ -3407,9 +3468,9 @@ print_completion() {
     echo "  journalctl -u $SERVICE_NAME -f    - View logs"
     echo
     echo -e "${YELLOW}Management:${NC}"
-    echo "  Update:     curl -sSL https://github.com/rcourtman/Pulse/releases/latest/download/install.sh | bash"
-    echo "  Reset:      curl -sSL https://github.com/rcourtman/Pulse/releases/latest/download/install.sh | bash -s -- --reset"
-    echo "  Uninstall:  curl -sSL https://github.com/rcourtman/Pulse/releases/latest/download/install.sh | bash -s -- --uninstall"
+    echo "  Update:     curl -sSL $(maintenance_raw_url "install.sh") | bash"
+    echo "  Reset:      curl -sSL $(maintenance_raw_url "install.sh") | bash -s -- --reset"
+    echo "  Uninstall:  curl -sSL $(maintenance_raw_url "install.sh") | bash -s -- --uninstall"
 
     # Show auto-update status if timer exists
     if systemctl list-unit-files --no-legend | grep -q "^pulse-update.timer"; then
@@ -3569,23 +3630,9 @@ main() {
         fi
         
         # Get both stable and RC versions
-        # Try GitHub API first, but have a fallback - with timeout protection
+        # Stable is explicitly pinned to the v5.1 maintenance line.
         local STABLE_VERSION=""
-        if command -v timeout >/dev/null 2>&1; then
-            STABLE_VERSION=$(timeout 10 curl -s --connect-timeout 5 --max-time 10 https://api.github.com/repos/$GITHUB_REPO/releases/latest 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
-        else
-            STABLE_VERSION=$(curl -s --connect-timeout 5 --max-time 10 https://api.github.com/repos/$GITHUB_REPO/releases/latest 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)
-        fi
-        
-        # If rate limited or failed, try direct GitHub latest URL
-        if [[ -z "$STABLE_VERSION" ]] || [[ "$STABLE_VERSION" == *"rate limit"* ]]; then
-            # Use the GitHub latest release redirect to get version
-            local redirect_version=""
-            redirect_version=$(get_latest_release_from_redirect 2>/dev/null || true)
-            if [[ -n "$redirect_version" ]]; then
-                STABLE_VERSION="$redirect_version"
-            fi
-        fi
+        STABLE_VERSION=$(get_latest_maintenance_stable_version)
         
         # For RC, we need the API, so if it fails just use empty
         local RC_VERSION=""
@@ -4088,7 +4135,7 @@ parse_args() {
                     SOURCE_BRANCH="$2"
                     shift 2
                 else
-                    SOURCE_BRANCH="main"
+                    SOURCE_BRANCH="release/5.1"
                     shift
                 fi
                 ;;
@@ -4100,7 +4147,7 @@ parse_args() {
                 echo "  --stable           Install latest stable version (default)"
                 echo "  --version VERSION  Install specific version (e.g., v4.4.0-rc.1)"
                 echo "  --archive PATH     Install from a local Pulse release tarball"
-                echo "  --source [BRANCH]  Build and install from source (default: main)"
+                echo "  --source [BRANCH]  Build and install from source (default: release/5.1)"
                 echo "  --enable-auto-updates  Enable automatic stable updates (via systemd timer)"
                 echo ""
                 echo "Management options:"

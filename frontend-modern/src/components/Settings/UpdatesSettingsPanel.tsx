@@ -9,6 +9,7 @@ import Download from 'lucide-solid/icons/download';
 import type { UpdateInfo, VersionInfo, UpdatePlan } from '@/api/updates';
 import {
   V6_RC_ANNOUNCEMENT,
+  V5_MAINTENANCE_BRANCH,
   isV5ReleaseLine,
 } from '@/constants/releaseAnnouncements';
 
@@ -498,11 +499,11 @@ sudo tar -xzf pulse-v${props.updateInfo()?.latestVersion}-linux-amd64.tar.gz -C 
                       </div>
                       <div class="ml-8 relative group">
                         <code class="block p-3 bg-gray-900 dark:bg-gray-950 rounded-lg text-sm font-mono text-green-400 border border-gray-700">
-                          git pull origin main
+                          {`git pull origin ${V5_MAINTENANCE_BRANCH}`}
                         </code>
                         <button
                           type="button"
-                          onClick={() => navigator.clipboard.writeText('git pull origin main')}
+                          onClick={() => navigator.clipboard.writeText(`git pull origin ${V5_MAINTENANCE_BRANCH}`)}
                           class="absolute top-2 right-2 p-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 opacity-60 hover:opacity-100 transition-opacity"
                           title="Copy to clipboard"
                         >

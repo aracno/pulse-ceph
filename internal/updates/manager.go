@@ -588,6 +588,80 @@ func (m *Manager) GetCachedUpdateInfo() *UpdateInfo {
 	return m.checkCache[channel]
 }
 
+func releaseMatchesCurrentLine(releaseVer, currentVer *Version) bool {
+	if releaseVer == nil || currentVer == nil {
+		return false
+	}
+	if currentVer.Major != 5 || currentVer.Minor != 1 {
+		return true
+	}
+	return releaseVer.Major == currentVer.Major && releaseVer.Minor == currentVer.Minor
+}
+
+func selectLatestReleaseForChannel(releases []ReleaseInfo, channel string, currentVer *Version) (*ReleaseInfo, error) {
+	var newestRC *ReleaseInfo
+	var newestRCVer *Version
+	var newestStable *ReleaseInfo
+	var newestStableVer *Version
+
+	for i := range releases {
+		if releases[i].Draft {
+			log.Debug().Str("tag", releases[i].TagName).Msg("Skipping draft release")
+			continue
+		}
+
+		releaseVer, err := ParseVersion(releases[i].TagName)
+		if err != nil {
+			log.Debug().Str("tag", releases[i].TagName).Err(err).Msg("Failed to parse release version")
+			continue
+		}
+
+		if !releaseMatchesCurrentLine(releaseVer, currentVer) {
+			log.Debug().
+				Str("tag", releases[i].TagName).
+				Int("currentMajor", currentVer.Major).
+				Int("currentMinor", currentVer.Minor).
+				Msg("Skipping release outside current release line")
+			continue
+		}
+
+		if releases[i].Prerelease {
+			if channel != "rc" {
+				continue
+			}
+			if newestRCVer == nil || releaseVer.IsNewerThan(newestRCVer) {
+				newestRC = &releases[i]
+				newestRCVer = releaseVer
+			}
+			continue
+		}
+
+		if newestStableVer == nil || releaseVer.IsNewerThan(newestStableVer) {
+			newestStable = &releases[i]
+			newestStableVer = releaseVer
+		}
+	}
+
+	if channel == "rc" {
+		if newestStable != nil && newestRC != nil {
+			if newestStableVer.IsNewerThan(newestRCVer) {
+				return newestStable, nil
+			}
+			return newestRC, nil
+		}
+		if newestStable != nil {
+			return newestStable, nil
+		}
+		if newestRC != nil {
+			return newestRC, nil
+		}
+	} else if newestStable != nil {
+		return newestStable, nil
+	}
+
+	return nil, fmt.Errorf("no releases found for channel %s in %d.%d.x line", channel, currentVer.Major, currentVer.Minor)
+}
+
 // getLatestReleaseForChannel fetches the latest release from GitHub for a specific channel
 func (m *Manager) getLatestReleaseForChannel(ctx context.Context, channel string, currentVer *Version) (*ReleaseInfo, error) {
 	if channel == "" {
@@ -633,7 +707,7 @@ func (m *Manager) getLatestReleaseForChannel(ctx context.Context, channel string
 			Msg("GitHub API rate limit encountered, trying RSS fallback")
 
 		// Try RSS/Atom feed as fallback - doesn't count against rate limits
-		if feedRelease, err := m.getLatestReleaseFromFeed(ctx, channel); err == nil {
+		if feedRelease, err := m.getLatestReleaseFromFeed(ctx, channel, currentVer); err == nil {
 			log.Info().Str("version", feedRelease.TagName).Msg("Got release info from RSS feed fallback")
 			return feedRelease, nil
 		}
@@ -660,123 +734,34 @@ func (m *Manager) getLatestReleaseForChannel(ctx context.Context, channel string
 		return nil, fmt.Errorf("failed to decode releases: %w", err)
 	}
 
-	// Find latest release based on channel
-	// RC channel: return newest release (RC or stable), even if not newer than current
-	// Stable channel: return newest stable release, even if not newer than current
-	// The caller will determine if it's actually an update by comparing versions
-	if channel == "rc" {
-		// For RC channel: find newest release (RC or stable)
-		// RC users should see both RCs and stable releases
-		var newestRC *ReleaseInfo
-		var newestStable *ReleaseInfo
-
-		for i := range releases {
-			// Skip draft releases
-			if releases[i].Draft {
-				log.Debug().Str("tag", releases[i].TagName).Msg("Skipping draft release")
-				continue
-			}
-
-			releaseVer, err := ParseVersion(releases[i].TagName)
-			if err != nil {
-				log.Debug().Str("tag", releases[i].TagName).Err(err).Msg("Failed to parse release version")
-				continue
-			}
-
-			if releases[i].Prerelease {
-				// Track newest RC
-				if newestRC == nil {
-					newestRC = &releases[i]
-				} else {
-					newestRCVer, _ := ParseVersion(newestRC.TagName)
-					if releaseVer.IsNewerThan(newestRCVer) {
-						newestRC = &releases[i]
-					}
-				}
-			} else {
-				// Track newest stable
-				if newestStable == nil {
-					newestStable = &releases[i]
-				} else {
-					newestStableVer, _ := ParseVersion(newestStable.TagName)
-					if releaseVer.IsNewerThan(newestStableVer) {
-						newestStable = &releases[i]
-					}
-				}
-			}
-		}
-
-		// Return the highest version among candidates
-		// Stable versions are considered higher than RCs (4.22.0 > 4.22.0-rc.3)
-		if newestStable != nil && newestRC != nil {
-			stableVer, _ := ParseVersion(newestStable.TagName)
-			rcVer, _ := ParseVersion(newestRC.TagName)
-			if stableVer.IsNewerThan(rcVer) {
-				isUpdate := stableVer.IsNewerThan(currentVer)
-				if isUpdate {
-					log.Info().Str("version", newestStable.TagName).Msg("Found stable update for RC user")
-				} else {
-					log.Info().Str("version", newestStable.TagName).Msg("On latest stable version")
-				}
-				return newestStable, nil
-			}
-			isUpdate := rcVer.IsNewerThan(currentVer)
-			if isUpdate {
-				log.Info().Str("version", newestRC.TagName).Msg("Found RC update")
-			} else {
-				log.Info().Str("version", newestRC.TagName).Msg("On latest RC version")
-			}
-			return newestRC, nil
-		} else if newestStable != nil {
-			isUpdate := newestStable.TagName != currentVer.String()
-			if isUpdate {
-				log.Info().Str("version", newestStable.TagName).Msg("Found stable update for RC user")
-			} else {
-				log.Info().Str("version", newestStable.TagName).Msg("On latest stable version")
-			}
-			return newestStable, nil
-		} else if newestRC != nil {
-			isUpdate := newestRC.TagName != currentVer.String()
-			if isUpdate {
-				log.Info().Str("version", newestRC.TagName).Msg("Found RC update")
-			} else {
-				log.Info().Str("version", newestRC.TagName).Msg("On latest RC version")
-			}
-			return newestRC, nil
-		}
-	} else {
-		// For stable channel: find latest non-prerelease
-		for i := range releases {
-			// Skip draft releases
-			if releases[i].Draft {
-				log.Debug().Str("tag", releases[i].TagName).Msg("Skipping draft release")
-				continue
-			}
-
-			if releases[i].Prerelease {
-				continue
-			}
-
-			releaseVer, err := ParseVersion(releases[i].TagName)
-			if err != nil {
-				log.Debug().Str("tag", releases[i].TagName).Err(err).Msg("Failed to parse release version")
-				continue
-			}
-
-			// Found the latest stable release
-			isUpdate := releaseVer.IsNewerThan(currentVer)
-			if isUpdate {
-				log.Info().Str("version", releases[i].TagName).Msg("Found stable update")
-			} else {
-				log.Info().Str("version", releases[i].TagName).Msg("On latest stable version")
-			}
-			return &releases[i], nil
-		}
+	release, err := selectLatestReleaseForChannel(releases, channel, currentVer)
+	if err != nil {
+		log.Warn().
+			Str("channel", channel).
+			Int("currentMajor", currentVer.Major).
+			Int("currentMinor", currentVer.Minor).
+			Msg("No releases found for channel in current release line")
+		return nil, err
 	}
 
-	// No releases found at all for this channel
-	log.Warn().Str("channel", channel).Msg("No releases found for channel")
-	return nil, fmt.Errorf("no releases found for channel %s", channel)
+	releaseVer, err := ParseVersion(release.TagName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse selected release version: %w", err)
+	}
+
+	if releaseVer.IsNewerThan(currentVer) {
+		if release.Prerelease {
+			log.Info().Str("version", release.TagName).Msg("Found prerelease update")
+		} else {
+			log.Info().Str("version", release.TagName).Msg("Found stable update")
+		}
+	} else if release.Prerelease {
+		log.Info().Str("version", release.TagName).Msg("On latest prerelease version")
+	} else {
+		log.Info().Str("version", release.TagName).Msg("On latest stable version")
+	}
+
+	return release, nil
 }
 
 func (m *Manager) resolveChannel(requested string, currentInfo *VersionInfo) string {
@@ -795,7 +780,7 @@ func (m *Manager) resolveChannel(requested string, currentInfo *VersionInfo) str
 // getLatestReleaseFromFeed fetches the latest release from GitHub's Atom feed
 // This is used as a fallback when the API is rate-limited, as the Atom feed
 // doesn't count against API rate limits.
-func (m *Manager) getLatestReleaseFromFeed(ctx context.Context, channel string) (*ReleaseInfo, error) {
+func (m *Manager) getLatestReleaseFromFeed(ctx context.Context, channel string, currentVer *Version) (*ReleaseInfo, error) {
 	feedURL := "https://github.com/rcourtman/Pulse/releases.atom"
 
 	req, err := http.NewRequestWithContext(ctx, "GET", feedURL, nil)
@@ -834,7 +819,7 @@ func (m *Manager) getLatestReleaseFromFeed(ctx context.Context, channel string) 
 		return nil, fmt.Errorf("no version tags found in feed")
 	}
 
-	// Filter based on channel
+	var releases []ReleaseInfo
 	for _, match := range matches {
 		if len(match) < 2 {
 			continue
@@ -849,28 +834,27 @@ func (m *Manager) getLatestReleaseFromFeed(ctx context.Context, channel string) 
 
 		isPrerelease := ver.IsPrerelease()
 
-		// For stable channel, skip prereleases
-		if channel == "stable" && isPrerelease {
-			continue
-		}
-
-		// Found a valid release for this channel
-		log.Debug().
-			Str("tag", tagName).
-			Bool("prerelease", isPrerelease).
-			Str("channel", channel).
-			Msg("Found release from feed")
-
-		return &ReleaseInfo{
+		releases = append(releases, ReleaseInfo{
 			TagName:    tagName,
 			Name:       "Pulse " + tagName,
 			Prerelease: isPrerelease,
 			// Note: Feed doesn't include full release notes or asset info
 			// This is just for version checking - actual download still uses known URL patterns
-		}, nil
+		})
 	}
 
-	return nil, fmt.Errorf("no suitable release found for channel %s", channel)
+	release, err := selectLatestReleaseForChannel(releases, channel, currentVer)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Debug().
+		Str("tag", release.TagName).
+		Bool("prerelease", release.Prerelease).
+		Str("channel", channel).
+		Msg("Found release from feed")
+
+	return release, nil
 }
 
 func (m *Manager) createHistoryEntry(ctx context.Context, entry UpdateHistoryEntry) string {

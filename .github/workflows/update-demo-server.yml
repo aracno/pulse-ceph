@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to deploy (e.g., v4.29.0)'
+        description: 'Release tag to deploy (e.g., v5.1.28)'
         required: true
         type: string
 
@@ -37,12 +37,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TARGET="${{ steps.target.outputs.tag }}"
-          LATEST=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
+          LATEST=$(gh api "repos/${{ github.repository }}/releases?per_page=100" --jq 'map(select(.draft == false and .prerelease == false and (.tag_name | test("^v5\\.1\\.[0-9]+$"))))[0].tag_name')
           echo "Target tag: $TARGET"
-          echo "Latest published tag: $LATEST"
+          echo "Latest published v5.1 tag: $LATEST"
           if [ "$TARGET" != "$LATEST" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Release is not the latest; skipping demo update."
+            echo "Release is not the latest v5.1 stable release; skipping demo update."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -55,7 +55,7 @@ jobs:
           else
             echo "Release: ${{ github.event.release.tag_name }}"
             echo "Prerelease: ${{ github.event.release.prerelease }}"
-            echo "Updating demo server to latest stable release..."
+            echo "Updating demo server to latest stable v5.1 release..."
           fi
 
       - name: Wait for release assets
@@ -123,7 +123,7 @@ jobs:
           TAG="${{ steps.target.outputs.tag }}"
           # Use set -o pipefail to ensure curl errors aren't masked by bash
           ssh -i ~/.ssh/id_ed25519 ${{ secrets.DEMO_SERVER_USER }}@${{ secrets.DEMO_SERVER_HOST }} \
-            "set -o pipefail && curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/main/install.sh | sudo bash -s -- --version $TAG"
+            "set -o pipefail && curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/install.sh | sudo bash -s -- --version $TAG"
 
       - name: Verify update
         if: steps.gate.outputs.skip != 'true' && steps.current.outputs.skip_current != 'true'

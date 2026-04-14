@@ -25,6 +25,7 @@ func setupUnifiedAgentRouter(t *testing.T) (*Router, string) {
 
 	router := &Router{
 		projectRoot:   tempDir,
+		serverVersion: "5.1.28",
 		checksumCache: make(map[string]checksumCacheEntry),
 	}
 
@@ -130,7 +131,7 @@ func TestDownloadUnifiedAgent_ProxyFromGitHub(t *testing.T) {
 	// Ensure NO local files exist (temp dir is empty of binaries)
 	// Set up a mock HTTP client to simulate GitHub response
 	binaryContent := "fake binary content for proxy test"
-	expectedURL := "https://github.com/rcourtman/Pulse/releases/latest/download/pulse-agent-linux-amd64"
+	expectedURL := "https://github.com/rcourtman/Pulse/releases/download/v5.1.28/pulse-agent-linux-amd64"
 	router.installScriptClient = newTestInstallScriptClient(t, expectedURL, http.StatusOK, binaryContent, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/install/agent?arch=linux-amd64", nil)
@@ -153,7 +154,7 @@ func TestDownloadUnifiedAgent_ProxyFromGitHub_Windows(t *testing.T) {
 	router, _ := setupUnifiedAgentRouter(t)
 
 	binaryContent := "MZ fake windows binary"
-	expectedURL := "https://github.com/rcourtman/Pulse/releases/latest/download/pulse-agent-windows-amd64.exe"
+	expectedURL := "https://github.com/rcourtman/Pulse/releases/download/v5.1.28/pulse-agent-windows-amd64.exe"
 	router.installScriptClient = newTestInstallScriptClient(t, expectedURL, http.StatusOK, binaryContent, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/install/agent?arch=windows-amd64", nil)
@@ -213,6 +214,26 @@ func TestNormalizeUnifiedAgentArch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			assert.Equal(t, tt.expected, normalizeUnifiedAgentArch(tt.input))
+		})
+	}
+}
+
+func TestReleaseAssetTagFromServerVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		want    string
+	}{
+		{name: "release", version: "5.1.28", want: "v5.1.28"},
+		{name: "prerelease", version: "5.1.29-rc.1", want: "v5.1.29-rc.1"},
+		{name: "build metadata stripped", version: "5.1.28+git.2.gabc123", want: "v5.1.28"},
+		{name: "zero dev version rejected", version: "0.0.0-dev", want: ""},
+		{name: "empty", version: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, releaseAssetTagFromServerVersion(tt.version))
 		})
 	}
 }

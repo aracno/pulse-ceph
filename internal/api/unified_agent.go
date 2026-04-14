@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -10,8 +11,43 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rcourtman/pulse-go-rewrite/internal/updates"
 	"github.com/rs/zerolog/log"
 )
+
+const v5MaintenanceScriptRef = "release/5.1"
+
+func releaseAssetTagFromServerVersion(serverVersion string) string {
+	version := strings.TrimSpace(serverVersion)
+	if version == "" || strings.EqualFold(version, "dev") {
+		return ""
+	}
+
+	parsed, err := updates.ParseVersion(version)
+	if err != nil {
+		return ""
+	}
+
+	if parsed.Major == 0 && parsed.Minor == 0 && parsed.Patch == 0 {
+		return ""
+	}
+
+	tag := fmt.Sprintf("v%d.%d.%d", parsed.Major, parsed.Minor, parsed.Patch)
+	if parsed.Prerelease != "" {
+		tag += "-" + parsed.Prerelease
+	}
+
+	return tag
+}
+
+func releaseAssetGitHubURL(assetName, serverVersion string) string {
+	tag := releaseAssetTagFromServerVersion(serverVersion)
+	if tag == "" {
+		return ""
+	}
+
+	return "https://github.com/rcourtman/Pulse/releases/download/" + tag + "/" + assetName
+}
 
 // handleDownloadUnifiedInstallScript serves the universal install.sh script
 func (r *Router) handleDownloadUnifiedInstallScript(w http.ResponseWriter, req *http.Request) {
@@ -104,6 +140,14 @@ func normalizeUnifiedAgentArch(arch string) string {
 	default:
 		return ""
 	}
+}
+
+func installScriptGitHubURL(scriptName, serverVersion string) string {
+	if releaseURL := releaseAssetGitHubURL(scriptName, serverVersion); releaseURL != "" {
+		return releaseURL
+	}
+
+	return "https://raw.githubusercontent.com/rcourtman/Pulse/" + v5MaintenanceScriptRef + "/scripts/" + scriptName
 }
 
 // handleDownloadUnifiedAgent serves the pulse-agent binary
@@ -199,7 +243,12 @@ func (r *Router) proxyAgentBinaryFromGitHub(w http.ResponseWriter, req *http.Req
 	if strings.HasPrefix(normalized, "windows-") {
 		binaryName += ".exe"
 	}
-	githubURL := "https://github.com/rcourtman/Pulse/releases/latest/download/" + binaryName
+	githubURL := releaseAssetGitHubURL(binaryName, r.serverVersion)
+	if githubURL == "" {
+		log.Error().Str("serverVersion", r.serverVersion).Msg("Cannot proxy agent binary without a released server version")
+		http.Error(w, "Agent binary unavailable for non-release server builds", http.StatusServiceUnavailable)
+		return
+	}
 
 	log.Info().Str("arch", normalized).Str("url", githubURL).Msg("Local agent binary not found, proxying from GitHub releases")
 
@@ -256,7 +305,12 @@ func (r *Router) proxyHostAgentBinaryFromGitHub(w http.ResponseWriter, req *http
 	if platform == "windows" {
 		binaryName += ".exe"
 	}
-	githubURL := "https://github.com/rcourtman/Pulse/releases/latest/download/" + binaryName
+	githubURL := releaseAssetGitHubURL(binaryName, r.serverVersion)
+	if githubURL == "" {
+		log.Error().Str("serverVersion", r.serverVersion).Msg("Cannot proxy host agent binary without a released server version")
+		http.Error(w, "Host agent binary unavailable for non-release server builds", http.StatusServiceUnavailable)
+		return
+	}
 
 	log.Info().
 		Str("platform", platform).
@@ -319,8 +373,7 @@ func (r *Router) proxyHostAgentBinaryFromGitHub(w http.ResponseWriter, req *http
 // proxyInstallScriptFromGitHub fetches an install script from GitHub releases
 // This is used as a fallback when scripts aren't available locally (e.g., LXC updates)
 func (r *Router) proxyInstallScriptFromGitHub(w http.ResponseWriter, req *http.Request, scriptName string) {
-	// Use raw.githubusercontent.com to fetch from main branch
-	githubURL := "https://raw.githubusercontent.com/rcourtman/Pulse/main/scripts/" + scriptName
+	githubURL := installScriptGitHubURL(scriptName, r.serverVersion)
 
 	client := r.installScriptClient
 	if client == nil {

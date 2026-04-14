@@ -56,8 +56,8 @@ func TestCheckForUpdatesWithChannel_AvailableUsesCache(t *testing.T) {
 	releaseTime := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
 	releases := []ReleaseInfo{
 		{
-			TagName:     "v99.0.0",
-			Name:        "v99.0.0",
+			TagName:     "v5.1.99",
+			Name:        "v5.1.99",
 			Body:        "Release notes",
 			Prerelease:  false,
 			PublishedAt: releaseTime,
@@ -66,8 +66,8 @@ func TestCheckForUpdatesWithChannel_AvailableUsesCache(t *testing.T) {
 				BrowserDownloadURL string `json:"browser_download_url"`
 			}{
 				{
-					Name:               "pulse-v99.0.0-linux-amd64.tar.gz",
-					BrowserDownloadURL: "https://example.com/pulse-v99.0.0-linux-amd64.tar.gz",
+					Name:               "pulse-v5.1.99-linux-amd64.tar.gz",
+					BrowserDownloadURL: "https://example.com/pulse-v5.1.99-linux-amd64.tar.gz",
 				},
 			},
 		},
@@ -87,8 +87,8 @@ func TestCheckForUpdatesWithChannel_AvailableUsesCache(t *testing.T) {
 	if !info.Available {
 		t.Fatalf("expected update to be available")
 	}
-	if info.LatestVersion != "99.0.0" {
-		t.Fatalf("LatestVersion = %q, want 99.0.0", info.LatestVersion)
+	if info.LatestVersion != "5.1.99" {
+		t.Fatalf("LatestVersion = %q, want 5.1.99", info.LatestVersion)
 	}
 	if info.DownloadURL == "" {
 		t.Fatalf("DownloadURL not set")
@@ -110,8 +110,8 @@ func TestCheckForUpdatesWithChannel_NoReleases(t *testing.T) {
 	var hits int32
 	releases := []ReleaseInfo{
 		{
-			TagName:     "v99.0.0-rc.1",
-			Name:        "v99.0.0-rc.1",
+			TagName:     "v5.1.99-rc.1",
+			Name:        "v5.1.99-rc.1",
 			Prerelease:  true,
 			PublishedAt: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC),
 		},
@@ -140,8 +140,8 @@ func TestCheckForUpdates_Wrapper(t *testing.T) {
 	var hits int32
 	releases := []ReleaseInfo{
 		{
-			TagName:     "v99.1.0",
-			Name:        "v99.1.0",
+			TagName:     "v5.1.100",
+			Name:        "v5.1.100",
 			Body:        "Release notes",
 			Prerelease:  false,
 			PublishedAt: time.Date(2024, 2, 3, 4, 5, 6, 0, time.UTC),
@@ -150,8 +150,8 @@ func TestCheckForUpdates_Wrapper(t *testing.T) {
 				BrowserDownloadURL string `json:"browser_download_url"`
 			}{
 				{
-					Name:               "pulse-v99.1.0-linux-amd64.tar.gz",
-					BrowserDownloadURL: "https://example.com/pulse-v99.1.0-linux-amd64.tar.gz",
+					Name:               "pulse-v5.1.100-linux-amd64.tar.gz",
+					BrowserDownloadURL: "https://example.com/pulse-v5.1.100-linux-amd64.tar.gz",
 				},
 			},
 		},
@@ -171,7 +171,7 @@ func TestCheckForUpdates_Wrapper(t *testing.T) {
 	if !info.Available {
 		t.Fatalf("expected update to be available")
 	}
-	if info.LatestVersion != "99.1.0" {
-		t.Fatalf("LatestVersion = %q, want 99.1.0", info.LatestVersion)
+	if info.LatestVersion != "5.1.100" {
+		t.Fatalf("LatestVersion = %q, want 5.1.100", info.LatestVersion)
 	}
 }

@@ -19,17 +19,17 @@ import (
 
 // InstallShAdapter wraps the install.sh script for systemd/LXC deployments
 type InstallShAdapter struct {
-	history          *UpdateHistory
-	installScriptURL string
-	logDir           string
+	history             *UpdateHistory
+	releaseAssetBaseURL string
+	logDir              string
 }
 
 // NewInstallShAdapter creates a new install.sh adapter
 func NewInstallShAdapter(history *UpdateHistory) *InstallShAdapter {
 	return &InstallShAdapter{
-		history:          history,
-		installScriptURL: "https://github.com/rcourtman/Pulse/releases/latest/download/install.sh",
-		logDir:           "/var/log/pulse",
+		history:             history,
+		releaseAssetBaseURL: "https://github.com/rcourtman/Pulse/releases/download",
+		logDir:              "/var/log/pulse",
 	}
 }
 
@@ -88,12 +88,21 @@ func (a *InstallShAdapter) Execute(ctx context.Context, request UpdateRequest, p
 		Message:  "Downloading installation script...",
 	})
 
+	// Validate version string to prevent command injection
+	// Version must match semantic versioning format (with optional 'v' prefix)
+	versionPattern := regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?(?:\+[a-zA-Z0-9.-]+)?$`)
+	if !versionPattern.MatchString(request.Version) {
+		return fmt.Errorf("invalid version format: %s", request.Version)
+	}
+
+	installScriptURL := a.installScriptURLForVersion(request.Version)
+
 	log.Info().
-		Str("url", a.installScriptURL).
+		Str("url", installScriptURL).
 		Str("version", request.Version).
 		Msg("Downloading install script")
 
-	installScript, err := a.downloadInstallScript(ctx)
+	installScript, err := a.downloadInstallScript(ctx, installScriptURL)
 	if err != nil {
 		return fmt.Errorf("failed to download install script: %w", err)
 	}
@@ -104,13 +113,6 @@ func (a *InstallShAdapter) Execute(ctx context.Context, request UpdateRequest, p
 		Progress: 20,
 		Message:  "Preparing update...",
 	})
-
-	// Validate version string to prevent command injection
-	// Version must match semantic versioning format (with optional 'v' prefix)
-	versionPattern := regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?(?:\+[a-zA-Z0-9.-]+)?$`)
-	if !versionPattern.MatchString(request.Version) {
-		return fmt.Errorf("invalid version format: %s", request.Version)
-	}
 
 	// Build command: bash install.sh --version vX.Y.Z
 	args := []string{"-s", "--", "--version", request.Version}
@@ -209,6 +211,14 @@ func (a *InstallShAdapter) Execute(ctx context.Context, request UpdateRequest, p
 		Msg("Update completed successfully")
 
 	return nil
+}
+
+func (a *InstallShAdapter) installScriptURLForVersion(version string) string {
+	tag := strings.TrimSpace(version)
+	if !strings.HasPrefix(tag, "v") {
+		tag = "v" + tag
+	}
+	return fmt.Sprintf("%s/%s/install.sh", a.releaseAssetBaseURL, tag)
 }
 
 // Rollback rolls back to a previous version
@@ -535,7 +545,7 @@ func (a *InstallShAdapter) waitForHealth(ctx context.Context, timeout time.Durat
 }
 
 // downloadInstallScript downloads the install.sh script
-func (a *InstallShAdapter) downloadInstallScript(ctx context.Context) (string, error) {
+func (a *InstallShAdapter) downloadInstallScript(ctx context.Context, installScriptURL string) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "pulse-installsh-*")
 	if err != nil {
 		return "", err
@@ -544,12 +554,12 @@ func (a *InstallShAdapter) downloadInstallScript(ctx context.Context) (string, e
 
 	scriptPath := filepath.Join(tmpDir, "install.sh")
 
-	cmd := exec.CommandContext(ctx, "curl", "-fsSL", "-o", scriptPath, a.installScriptURL)
+	cmd := exec.CommandContext(ctx, "curl", "-fsSL", "-o", scriptPath, installScriptURL)
 	if err := cmd.Run(); err != nil {
 		return "", err
 	}
 
-	checksumURL := a.installScriptURL + ".sha256"
+	checksumURL := installScriptURL + ".sha256"
 	checksumPath := scriptPath + ".sha256"
 	cmd = exec.CommandContext(ctx, "curl", "-fsSL", "-o", checksumPath, checksumURL)
 	if err := cmd.Run(); err != nil {

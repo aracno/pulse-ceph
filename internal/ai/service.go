@@ -3452,9 +3452,9 @@ resource_id format: {instance}:{node}:{vmid} (colons, not dashes)
 Example: "delly:minipc:201" for VMID 201 on node minipc in instance delly
 
 ## Installing/Updating Pulse
-curl -sSL https://raw.githubusercontent.com/rcourtman/Pulse/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/install.sh | bash
 After: systemctl enable pulse && systemctl start pulse
-Latest version: https://api.github.com/repos/rcourtman/Pulse/releases/latest`
+Stable v5 line: https://github.com/rcourtman/Pulse/releases?q=v5.1`
 
 	// Add custom context from AI settings (user's infrastructure description)
 	s.mu.RLock()

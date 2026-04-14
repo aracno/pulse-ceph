@@ -83,7 +83,7 @@ If you use the legacy `docker-compose` binary, replace `docker compose` with `do
 ### ProxmoxVE LXC (Manual)
 
 ```bash
-curl -fsSL https://github.com/rcourtman/Pulse/releases/latest/download/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/install.sh | bash
 ```
 
 This script installs/updates the **Pulse server**. Agent updates use the `/install.sh` command generated in **Settings → Agents → Installation commands**.
@@ -91,7 +91,7 @@ This script installs/updates the **Pulse server**. Agent updates use the `/insta
 ### Systemd Service (Manual)
 
 ```bash
-curl -fsSL https://github.com/rcourtman/Pulse/releases/latest/download/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/install.sh | bash
 ```
 
 This script installs/updates the **Pulse server**. Agent updates use the `/install.sh` command generated in **Settings → Agents → Installation commands**.

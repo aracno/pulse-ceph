@@ -80,14 +80,14 @@ ssh -i /path/to/key root@node "cat /sys/class/thermal/thermal_zone0/temp"
 If you still have the old sensor proxy installed from prior releases, remove it from each **Proxmox host** (not the Pulse container) with the supported cleanup helper:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/main/scripts/uninstall-sensor-proxy.sh | \
+curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/scripts/uninstall-sensor-proxy.sh | \
   sudo bash -s -- --uninstall --purge
 ```
 
 If you also want to remove the `pulse-monitor@pam` API user/tokens for a full clean slate before re-adding the node, include `--remove-proxmox-access`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/main/scripts/uninstall-sensor-proxy.sh | \
+curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/scripts/uninstall-sensor-proxy.sh | \
   sudo bash -s -- --uninstall --purge --remove-proxmox-access
 ```
 

@@ -66,7 +66,7 @@ func TestDownloadUnifiedInstallScriptPS_MethodNotAllowed(t *testing.T) {
 
 func TestDownloadUnifiedInstallScript_ProxyFallback(t *testing.T) {
 	router, _ := setupUnifiedAgentRouter(t)
-	expectedURL := "https://raw.githubusercontent.com/rcourtman/Pulse/main/scripts/install.sh"
+	expectedURL := "https://github.com/rcourtman/Pulse/releases/download/v5.1.28/install.sh"
 	payload := "#!/bin/bash\necho hi"
 	router.installScriptClient = newTestInstallScriptClient(t, expectedURL, http.StatusOK, payload, nil)
 
@@ -94,7 +94,7 @@ func TestDownloadUnifiedInstallScript_ProxyFallback(t *testing.T) {
 
 func TestDownloadUnifiedInstallScriptPS_ProxyFallback(t *testing.T) {
 	router, _ := setupUnifiedAgentRouter(t)
-	expectedURL := "https://raw.githubusercontent.com/rcourtman/Pulse/main/scripts/install.ps1"
+	expectedURL := "https://github.com/rcourtman/Pulse/releases/download/v5.1.28/install.ps1"
 	payload := "Write-Host 'hi'"
 	router.installScriptClient = newTestInstallScriptClient(t, expectedURL, http.StatusOK, payload, nil)
 
@@ -111,6 +111,26 @@ func TestDownloadUnifiedInstallScriptPS_ProxyFallback(t *testing.T) {
 	}
 	if !strings.Contains(w.Header().Get("Content-Disposition"), "install.ps1") {
 		t.Fatalf("missing Content-Disposition filename")
+	}
+}
+
+func TestDownloadUnifiedInstallScript_ProxyFallback_DevBuildUsesMaintenanceBranch(t *testing.T) {
+	router, _ := setupUnifiedAgentRouter(t)
+	router.serverVersion = ""
+	expectedURL := "https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/scripts/install.sh"
+	payload := "#!/bin/bash\necho hi"
+	router.installScriptClient = newTestInstallScriptClient(t, expectedURL, http.StatusOK, payload, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/install.sh", nil)
+	w := httptest.NewRecorder()
+
+	router.handleDownloadUnifiedInstallScript(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if strings.TrimSpace(w.Body.String()) != payload {
+		t.Fatalf("unexpected response body")
 	}
 }
 

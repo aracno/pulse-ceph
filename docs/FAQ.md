@@ -6,7 +6,7 @@
 If you run Proxmox VE, use the official LXC installer (recommended):
 
 ```bash
-curl -fsSL https://github.com/rcourtman/Pulse/releases/latest/download/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/install.sh | bash
 ```
 
 Note: this installs the Pulse **server**. Agent installs use the command from **Settings → Agents → Installation commands** (served from `/install.sh` on your Pulse server).

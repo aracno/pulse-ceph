@@ -19,7 +19,7 @@ Preferred path:
 If you prefer CLI, use the official installer for the target version:
 
 ```bash
-curl -fsSL https://github.com/rcourtman/Pulse/releases/latest/download/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/install.sh | \
   sudo bash -s -- --version vX.Y.Z
 ```
 
@@ -61,7 +61,7 @@ If you reset auth (for example by deleting `.env`), Pulse may require a bootstra
 The `pulse-sensor-proxy` from v4 is no longer needed — temperature monitoring is now handled by the unified agent. If you had the sensor proxy installed on your Proxmox hosts, remove it **on each host** after upgrading:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/main/scripts/uninstall-sensor-proxy.sh | \
+curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/scripts/uninstall-sensor-proxy.sh | \
   sudo bash -s -- --uninstall --purge
 ```
 

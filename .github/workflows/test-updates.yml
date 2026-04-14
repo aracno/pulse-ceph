@@ -15,6 +15,7 @@ on:
   push:
     branches:
       - main
+      - release/5.1
       - master
     paths:
       - 'internal/updates/**'
