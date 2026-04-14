@@ -478,21 +478,47 @@ func TestNewInstallShAdapter(t *testing.T) {
 		t.Fatal("NewInstallShAdapter returned nil")
 	}
 
-	if adapter.installScriptURL == "" {
-		t.Error("installScriptURL should not be empty")
+	if adapter.releaseAssetBaseURL == "" {
+		t.Error("releaseAssetBaseURL should not be empty")
 	}
 
 	if adapter.logDir == "" {
 		t.Error("logDir should not be empty")
 	}
 
-	expectedURL := "https://github.com/rcourtman/Pulse/releases/latest/download/install.sh"
-	if adapter.installScriptURL != expectedURL {
-		t.Errorf("installScriptURL = %q, want %q", adapter.installScriptURL, expectedURL)
+	expectedURL := "https://github.com/rcourtman/Pulse/releases/download"
+	if adapter.releaseAssetBaseURL != expectedURL {
+		t.Errorf("releaseAssetBaseURL = %q, want %q", adapter.releaseAssetBaseURL, expectedURL)
 	}
 
 	expectedLogDir := "/var/log/pulse"
 	if adapter.logDir != expectedLogDir {
 		t.Errorf("logDir = %q, want %q", adapter.logDir, expectedLogDir)
+	}
+}
+
+func TestInstallShAdapter_InstallScriptURLForVersion(t *testing.T) {
+	adapter := NewInstallShAdapter(nil)
+
+	tests := []struct {
+		version string
+		want    string
+	}{
+		{
+			version: "5.1.28",
+			want:    "https://github.com/rcourtman/Pulse/releases/download/v5.1.28/install.sh",
+		},
+		{
+			version: "v5.1.29-rc.1",
+			want:    "https://github.com/rcourtman/Pulse/releases/download/v5.1.29-rc.1/install.sh",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.version, func(t *testing.T) {
+			if got := adapter.installScriptURLForVersion(tc.version); got != tc.want {
+				t.Fatalf("installScriptURLForVersion(%q) = %q, want %q", tc.version, got, tc.want)
+			}
+		})
 	}
 }

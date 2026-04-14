@@ -69,8 +69,8 @@ func TestInstallShAdapter_DownloadInstallScript(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	adapter := &InstallShAdapter{installScriptURL: "http://example/install.sh"}
-	out, err := adapter.downloadInstallScript(context.Background())
+	adapter := &InstallShAdapter{releaseAssetBaseURL: "http://example/releases/download"}
+	out, err := adapter.downloadInstallScript(context.Background(), adapter.installScriptURLForVersion("v1.2.3"))
 	if err != nil {
 		t.Fatalf("downloadInstallScript error: %v", err)
 	}

@@ -8,6 +8,7 @@ set -euo pipefail
 
 # Configuration
 GITHUB_REPO="rcourtman/Pulse"
+DEFAULT_SOURCE_BRANCH="release/5.1"
 INSTALL_DIR="/opt/pulse"
 CONFIG_DIR="/etc/pulse"
 LOG_TAG="pulse-auto-update"
@@ -61,19 +62,27 @@ get_current_version() {
 # Get latest stable release from GitHub
 get_latest_stable_version() {
     local latest_version=""
+    local releases_json=""
+    local feed_xml=""
+    local api_url="https://api.github.com/repos/$GITHUB_REPO/releases"
+    local feed_url="https://github.com/$GITHUB_REPO/releases.atom"
     
-    # Get latest stable release (not pre-releases)
-    latest_version=$(curl -s "https://api.github.com/repos/$GITHUB_REPO/releases/latest" | \
-        grep '"tag_name":' | \
-        sed -E 's/.*"([^"]+)".*/\1/' || true)
-    
-    # Check if we got rate limited or failed
-    if [[ -z "$latest_version" ]] || [[ "$latest_version" == *"rate limit"* ]]; then
-        # Try direct GitHub latest URL as fallback
-        latest_version=$(curl -sI "https://github.com/$GITHUB_REPO/releases/latest" | \
-            grep -i '^location:' | \
-            sed -E 's|.*tag/([^[:space:]]+).*|\1|' | \
-            tr -d '\r' || true)
+    releases_json=$(curl -fsSL --connect-timeout 5 --max-time 10 "$api_url" 2>/dev/null || true)
+    if [[ -n "$releases_json" ]]; then
+        latest_version=$(printf '%s' "$releases_json" | \
+            grep -oE '"tag_name":[[:space:]]*"v5\.1\.[0-9]+"' | \
+            head -1 | \
+            sed -E 's/.*"([^"]+)"/\1/' || true)
+    fi
+
+    if [[ -z "$latest_version" ]]; then
+        feed_xml=$(curl -fsSL --connect-timeout 5 --max-time 10 "$feed_url" 2>/dev/null || true)
+        if [[ -n "$feed_xml" ]]; then
+            latest_version=$(printf '%s' "$feed_xml" | \
+                grep -oE '<title>Pulse v5\.1\.[0-9]+</title>' | \
+                head -1 | \
+                sed -E 's#<title>Pulse (v[^<]+)</title>#\1#' || true)
+        fi
     fi
     
     echo "${latest_version:-}"
@@ -201,15 +210,17 @@ perform_update() {
     # Run install script with specific version
     local marker_file="$INSTALL_DIR/BUILD_FROM_SOURCE"
     local -a installer_args=(--version "$new_version")
+    local install_script_url="https://raw.githubusercontent.com/$GITHUB_REPO/$DEFAULT_SOURCE_BRANCH/install.sh"
     if [[ -f "$marker_file" ]]; then
         local branch
         branch=$(tr -d '\r\n' <"$marker_file" 2>/dev/null || true)
         if [[ -n "$branch" ]]; then
             installer_args=(--source "$branch" "${installer_args[@]}")
+            install_script_url="https://raw.githubusercontent.com/$GITHUB_REPO/$branch/install.sh"
         fi
     fi
 
-    if curl -sSL "https://github.com/$GITHUB_REPO/releases/latest/download/install.sh" | \
+    if curl -sSL "$install_script_url" | \
        bash -s -- "${installer_args[@]}" 2>&1 | \
        while IFS= read -r line; do
            log info "installer: $line"

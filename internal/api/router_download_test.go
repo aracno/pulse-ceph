@@ -146,7 +146,8 @@ func TestHandleDownloadHostAgent_ProxyFromGitHub(t *testing.T) {
 	binDir := setupTempPulseBin(t)
 	router := &Router{
 		projectRoot:         t.TempDir(),
-		installScriptClient: newTestInstallScriptClient(t, "https://github.com/rcourtman/Pulse/releases/latest/download/pulse-host-agent-freebsd-amd64", http.StatusOK, "freebsd-binary", nil),
+		serverVersion:       "5.1.28",
+		installScriptClient: newTestInstallScriptClient(t, "https://github.com/rcourtman/Pulse/releases/download/v5.1.28/pulse-host-agent-freebsd-amd64", http.StatusOK, "freebsd-binary", nil),
 	}
 
 	for _, path := range []string{
@@ -183,7 +184,8 @@ func TestHandleDownloadHostAgentChecksum_ProxyFromGitHub(t *testing.T) {
 	binDir := setupTempPulseBin(t)
 	router := &Router{
 		projectRoot:         t.TempDir(),
-		installScriptClient: newTestInstallScriptClient(t, "https://github.com/rcourtman/Pulse/releases/latest/download/pulse-host-agent-freebsd-amd64", http.StatusOK, "freebsd-binary", nil),
+		serverVersion:       "5.1.28",
+		installScriptClient: newTestInstallScriptClient(t, "https://github.com/rcourtman/Pulse/releases/download/v5.1.28/pulse-host-agent-freebsd-amd64", http.StatusOK, "freebsd-binary", nil),
 	}
 
 	for _, path := range []string{

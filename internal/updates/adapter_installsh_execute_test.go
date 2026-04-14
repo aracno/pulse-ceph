@@ -71,8 +71,8 @@ func TestInstallShAdapterExecuteSuccess(t *testing.T) {
 	t.Setenv("PATH", strings.Join([]string{curlDir, bashDir, os.Getenv("PATH")}, string(os.PathListSeparator)))
 
 	adapter := &InstallShAdapter{
-		installScriptURL: "http://example/install.sh",
-		logDir:           t.TempDir(),
+		releaseAssetBaseURL: "http://example/releases/download",
+		logDir:              t.TempDir(),
 	}
 
 	var updates []UpdateProgress
@@ -105,8 +105,8 @@ func TestInstallShAdapterExecuteInvalidVersion(t *testing.T) {
 	t.Setenv("PATH", curlDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	adapter := &InstallShAdapter{
-		installScriptURL: "http://example/install.sh",
-		logDir:           t.TempDir(),
+		releaseAssetBaseURL: "http://example/releases/download",
+		logDir:              t.TempDir(),
 	}
 
 	err := adapter.Execute(context.Background(), UpdateRequest{Version: "bad version"}, func(UpdateProgress) {})

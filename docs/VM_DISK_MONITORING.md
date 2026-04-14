@@ -42,7 +42,7 @@ If guest disk values only populate for the first part of a large VM list, tune t
 ### Diagnostic Script
 Run this on your Proxmox host to debug specific VMs:
 ```bash
-curl -sSL https://raw.githubusercontent.com/rcourtman/Pulse/main/scripts/test-vm-disk.sh | bash
+curl -sSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/scripts/test-vm-disk.sh | bash
 ```
 
 ## 📝 Notes

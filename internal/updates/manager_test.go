@@ -110,6 +110,19 @@ func TestRCUpdateNotifications(t *testing.T) {
 			expectUpdate:    true,
 			description:     "RC user should see stable release even if RC number is same (4.22.0 > 4.22.0-rc.1)",
 		},
+		{
+			name:           "RC user ignores releases outside current line",
+			currentVersion: "5.1.28-rc.1",
+			releases: []ReleaseInfo{
+				{TagName: "v6.0.0-rc.1", Prerelease: true},
+				{TagName: "v6.0.0", Prerelease: false},
+				{TagName: "v5.1.28", Prerelease: false},
+				{TagName: "v5.1.28-rc.2", Prerelease: true},
+			},
+			expectedVersion: "v5.1.28",
+			expectUpdate:    true,
+			description:     "RC users on the maintenance line should not drift to the next major release",
+		},
 	}
 
 	for _, tt := range tests {
@@ -207,6 +220,18 @@ func TestStableUpdateNotifications(t *testing.T) {
 			expectUpdate:    true, // Returns latest version even if already on it (Available will be false)
 			description:     "Returns latest stable version even when already on it",
 		},
+		{
+			name:           "Stable user ignores newer stable outside current line",
+			currentVersion: "5.1.27",
+			releases: []ReleaseInfo{
+				{TagName: "v6.0.0", Prerelease: false},
+				{TagName: "v5.1.28", Prerelease: false},
+				{TagName: "v5.1.27", Prerelease: false},
+			},
+			expectedVersion: "v5.1.28",
+			expectUpdate:    true,
+			description:     "Stable users on 5.1 should stay on the 5.1 maintenance line",
+		},
 	}
 
 	for _, tt := range tests {
@@ -244,6 +269,69 @@ func TestStableUpdateNotifications(t *testing.T) {
 				if err == nil {
 					t.Errorf("Expected no update but got version %s. %s", release.TagName, tt.description)
 				}
+			}
+		})
+	}
+}
+
+func TestSelectLatestReleaseForChannel_LineAware(t *testing.T) {
+	currentVer, err := ParseVersion("5.1.28")
+	if err != nil {
+		t.Fatalf("failed to parse current version: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		channel     string
+		releases    []ReleaseInfo
+		expectedTag string
+		expectError bool
+	}{
+		{
+			name:    "stable selects newest stable in line",
+			channel: "stable",
+			releases: []ReleaseInfo{
+				{TagName: "v6.0.0", Prerelease: false},
+				{TagName: "v5.1.29", Prerelease: false},
+				{TagName: "v5.1.30-rc.1", Prerelease: true},
+			},
+			expectedTag: "v5.1.29",
+		},
+		{
+			name:    "rc selects highest in line",
+			channel: "rc",
+			releases: []ReleaseInfo{
+				{TagName: "v6.0.0-rc.1", Prerelease: true},
+				{TagName: "v5.1.30-rc.1", Prerelease: true},
+				{TagName: "v5.1.29", Prerelease: false},
+			},
+			expectedTag: "v5.1.30-rc.1",
+		},
+		{
+			name:    "stable errors when no matching line exists",
+			channel: "stable",
+			releases: []ReleaseInfo{
+				{TagName: "v6.0.0", Prerelease: false},
+				{TagName: "v6.0.1", Prerelease: false},
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			release, err := selectLatestReleaseForChannel(tt.releases, tt.channel, currentVer)
+			if tt.expectError {
+				if err == nil {
+					t.Fatalf("expected error, got release %s", release.TagName)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if release.TagName != tt.expectedTag {
+				t.Fatalf("selected release %s, want %s", release.TagName, tt.expectedTag)
 			}
 		})
 	}

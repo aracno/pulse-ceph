@@ -10,7 +10,7 @@ If you run Proxmox VE, the easiest and most “Pulse-native” deployment is the
 Run this on your Proxmox host:
 
 ```bash
-curl -fsSL https://github.com/rcourtman/Pulse/releases/latest/download/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/install.sh | bash
 ```
 
 > **Note**: The GitHub `install.sh` is the **server** installer. The agent installer is served from your Pulse server at `/install.sh` (see **Settings → Agents → Installation commands**).
@@ -72,7 +72,7 @@ See [KUBERNETES.md](KUBERNETES.md) for ingress and persistence configuration.
 For Linux servers (VM or bare metal), use the official installer:
 
 ```bash
-curl -fsSL https://github.com/rcourtman/Pulse/releases/latest/download/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/install.sh | sudo bash
 ```
 
 > **Note**: This installs the Pulse server. Use the `/install.sh` endpoint from your Pulse UI for installing `pulse-agent` on monitored hosts.

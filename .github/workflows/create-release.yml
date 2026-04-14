@@ -78,6 +78,16 @@ jobs:
           fi
           echo "[OK] VERSION file matches requested version ($REQUESTED_VERSION)"
 
+      - name: Enforce maintenance branch for 5.1.x releases
+        run: |
+          REQUESTED_VERSION="${{ steps.extract.outputs.version }}"
+          CURRENT_REF="${GITHUB_REF_NAME}"
+          if [[ "$REQUESTED_VERSION" =~ ^5\.1\.[0-9]+([-.].*)?$ ]] && [ "$CURRENT_REF" != "release/5.1" ]; then
+            echo "::error::5.1.x releases must be cut from release/5.1 (current ref: $CURRENT_REF)"
+            exit 1
+          fi
+          echo "[OK] Release ref ${CURRENT_REF} is valid for ${REQUESTED_VERSION}"
+
   # Frontend checks run in parallel with backend tests
   frontend_checks:
     needs: prepare
@@ -497,7 +507,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.WORKFLOW_PAT }}
         run: |
-          gh workflow run publish-docker.yml -f tag="${{ needs.prepare.outputs.tag }}"
+          gh workflow run publish-docker.yml \
+            --ref "${GITHUB_REF_NAME}" \
+            -f tag="${{ needs.prepare.outputs.tag }}"
           echo "[OK] Docker publish workflow dispatched"
 
       - name: Trigger demo server update
@@ -506,7 +518,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.WORKFLOW_PAT }}
         run: |
-          gh workflow run update-demo-server.yml -f tag="${{ needs.prepare.outputs.tag }}"
+          gh workflow run update-demo-server.yml \
+            --ref "${GITHUB_REF_NAME}" \
+            -f tag="${{ needs.prepare.outputs.tag }}"
           echo "[OK] Demo server update dispatched"
 
       - name: Summary

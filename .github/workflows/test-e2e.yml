@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+      - release/5.1
     paths:
       - 'frontend-modern/**'
       - 'internal/**'
@@ -13,6 +14,7 @@ on:
   push:
     branches:
       - main
+      - release/5.1
       - master
     paths:
       - 'frontend-modern/**'

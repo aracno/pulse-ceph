@@ -1,5 +1,7 @@
 import type { SecurityStatus } from '@/types/config';
 
+export const V5_MAINTENANCE_BRANCH = 'release/5.1';
+
 export const V6_RC_ANNOUNCEMENT = {
   id: 'v6-rc-testing-v6.0.0-rc.1',
   tag: 'v6.0.0-rc.1',

@@ -122,8 +122,16 @@ func TestGetLatestReleaseFromFeedMocked(t *testing.T) {
 	t.Cleanup(func() { http.DefaultTransport = origTransport })
 
 	manager := NewManager(&config.Config{})
+	stableCurrent, err := ParseVersion("4.36.1")
+	if err != nil {
+		t.Fatalf("parse stable current version: %v", err)
+	}
+	rcCurrent, err := ParseVersion("5.0.0-rc.0")
+	if err != nil {
+		t.Fatalf("parse rc current version: %v", err)
+	}
 
-	release, err := manager.getLatestReleaseFromFeed(context.Background(), "stable")
+	release, err := manager.getLatestReleaseFromFeed(context.Background(), "stable", stableCurrent)
 	if err != nil {
 		t.Fatalf("stable feed error: %v", err)
 	}
@@ -131,7 +139,7 @@ func TestGetLatestReleaseFromFeedMocked(t *testing.T) {
 		t.Fatalf("unexpected stable tag: %s", release.TagName)
 	}
 
-	release, err = manager.getLatestReleaseFromFeed(context.Background(), "rc")
+	release, err = manager.getLatestReleaseFromFeed(context.Background(), "rc", rcCurrent)
 	if err != nil {
 		t.Fatalf("rc feed error: %v", err)
 	}
@@ -140,7 +148,7 @@ func TestGetLatestReleaseFromFeedMocked(t *testing.T) {
 	}
 
 	feed = `<?xml version="1.0" encoding="UTF-8"?><feed></feed>`
-	if _, err := manager.getLatestReleaseFromFeed(context.Background(), "stable"); err == nil {
+	if _, err := manager.getLatestReleaseFromFeed(context.Background(), "stable", stableCurrent); err == nil {
 		t.Fatal("expected error for empty feed")
 	}
 }
