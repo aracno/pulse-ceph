@@ -1,17 +1,20 @@
 name: Release Helm Chart to GitHub Pages
 run-name: Release Helm Chart ${{ inputs.chart_version }}
 
-# Triggered automatically when publish-docker.yml completes, or manually
-# We wait for Docker publish because the smoke test pulls the Docker image
+# Triggered by publish-docker.yml after image publication, or manually.
+# The smoke test pulls the Docker image for the release tag.
 on:
-  workflow_run:
-    workflows: ["Publish Docker Images"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       chart_version:
         description: "Chart version (e.g., 4.28.0)"
         required: true
+        type: string
+      target_branch:
+        description: "Branch to update (defaults to release/5.1)"
+        required: false
+        default: "release/5.1"
+        type: string
 
 permissions:
   contents: write
@@ -19,13 +22,31 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # Only run if workflow_dispatch OR if workflow_run completed successfully
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
+      - name: Resolve target branch
+        id: target_branch
+        run: |
+          TARGET_BRANCH="${{ inputs.target_branch }}"
+          if [ -z "$TARGET_BRANCH" ]; then
+            TARGET_BRANCH="release/5.1"
+          fi
+
+          if [ -z "$TARGET_BRANCH" ]; then
+            echo "::error::Could not determine target branch"
+            exit 1
+          fi
+
+          echo "branch=$TARGET_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "Using target branch: $TARGET_BRANCH"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ steps.target_branch.outputs.branch }}
+
+      - name: Ensure branch checkout
+        run: git checkout "${{ steps.target_branch.outputs.branch }}"
 
       - name: Configure Git
         run: |
@@ -46,6 +67,8 @@ jobs:
           helm-docs --version
 
       - name: Generate chart documentation
+        env:
+          TARGET_BRANCH: ${{ steps.target_branch.outputs.branch }}
         run: |
           cd deploy/helm/pulse
           helm-docs
@@ -56,40 +79,26 @@ jobs:
             git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
             git add README.md
             git commit -m "Auto-update Helm chart documentation"
-            git pull --rebase origin main
-            git push origin main
+            git pull --rebase origin "$TARGET_BRANCH"
+            git push origin HEAD:"$TARGET_BRANCH"
           fi
           cd ../../..
 
-      - name: Determine chart version
+      - name: Resolve chart version
         id: version
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # Manual dispatch - use input directly
-            VERSION="${{ inputs.chart_version }}"
-          else
-            # workflow_run trigger - extract version from the triggering workflow
-            RUN_ID="${{ github.event.workflow_run.id }}"
-            echo "Extracting version from workflow run ${RUN_ID}..."
-            
-            WORKFLOW_DATA=$(gh api repos/${{ github.repository }}/actions/runs/${RUN_ID})
-            TAG=$(echo "$WORKFLOW_DATA" | jq -r '.display_title' | grep -oP 'v?\d+\.\d+\.\d+(-[a-zA-Z]+\.\d+)?' || echo "")
-            
-            if [ -z "$TAG" ]; then
-              echo "::error::Could not extract version from workflow_run"
-              exit 1
-            fi
-            
-            # Remove leading 'v' if present
-            VERSION="${TAG#v}"
+          VERSION="${{ inputs.chart_version }}"
+          if [ -z "$VERSION" ]; then
+            echo "::error::chart_version input is required"
+            exit 1
           fi
-          
+
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Chart version: $VERSION"
 
       - name: Update Chart.yaml version
+        env:
+          TARGET_BRANCH: ${{ steps.target_branch.outputs.branch }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           sed -i "s/^version: .*/version: $VERSION/" deploy/helm/pulse/Chart.yaml
@@ -101,8 +110,8 @@ jobs:
             git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
             git add deploy/helm/pulse/Chart.yaml
             git commit -m "Auto-update Helm chart version to $VERSION"
-            git pull --rebase origin main
-            git push origin main
+            git pull --rebase origin "$TARGET_BRANCH"
+            git push origin HEAD:"$TARGET_BRANCH"
           fi
 
       - name: Validate Helm chart

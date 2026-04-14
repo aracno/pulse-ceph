@@ -1,16 +1,20 @@
 name: Publish Helm Chart
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       chart_version:
         description: "Chart version (required when running manually, use format 4.24.0)"
         required: true
+        type: string
       app_version:
         description: "Application version to embed (defaults to chart version)"
         required: false
+        type: string
+      release_tag:
+        description: "Release tag to attach the chart asset to (e.g., v5.1.28)"
+        required: true
+        type: string
 
 jobs:
   publish:
@@ -31,25 +35,21 @@ jobs:
       - name: Determine chart version
         id: versions
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            CHART_VERSION="${{ inputs.chart_version }}"
-            if [ -z "$CHART_VERSION" ]; then
-              echo "::error::chart_version input is required when running manually"
-              exit 1
-            fi
-            APP_VERSION="${{ inputs.app_version }}"
-            if [ -z "$APP_VERSION" ]; then
-              APP_VERSION="$CHART_VERSION"
-            fi
-            RELEASE_TAG="$CHART_VERSION"
-          else
-            RELEASE_TAG="${{ github.event.release.tag_name }}"
-            if [ -z "$RELEASE_TAG" ]; then
-              echo "::error::Release tag is empty"
-              exit 1
-            fi
-            CHART_VERSION="${RELEASE_TAG#v}"
+          CHART_VERSION="${{ inputs.chart_version }}"
+          if [ -z "$CHART_VERSION" ]; then
+            echo "::error::chart_version input is required"
+            exit 1
+          fi
+
+          APP_VERSION="${{ inputs.app_version }}"
+          if [ -z "$APP_VERSION" ]; then
             APP_VERSION="$CHART_VERSION"
+          fi
+
+          RELEASE_TAG="${{ inputs.release_tag }}"
+          if [ -z "$RELEASE_TAG" ]; then
+            echo "::error::release_tag input is required"
+            exit 1
           fi
 
           echo "chart_version=$CHART_VERSION" >> "$GITHUB_OUTPUT"
@@ -97,7 +97,6 @@ jobs:
           echo "Package visibility configuration attempted. Verify at: https://github.com/${{ github.repository_owner }}?tab=packages"
 
       - name: Attach chart to release
-        if: github.event_name == 'release'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |

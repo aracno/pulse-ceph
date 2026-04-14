@@ -4,7 +4,7 @@
 
 **File**: `update-demo-server.yml`
 
-Automatically updates the public demo server when a new stable release is published.
+Updates the public demo server when the release pipeline dispatches a new stable release deployment, or when run manually.
 
 ### Configuration Required
 
@@ -25,8 +25,8 @@ Add these secrets to your GitHub repository settings (`Settings` → `Secrets an
 
 ### How It Works
 
-1. **Trigger**: Runs automatically when a GitHub release is published
-2. **Filter**: Only runs for stable releases (skips RC/pre-releases)
+1. **Trigger**: Dispatched by the release pipeline after a stable release is published, or run manually from the Actions tab
+2. **Filter**: The release pipeline only dispatches this for stable releases
 3. **Update**: SSHs to demo server and runs the install script
 4. **Verify**: Checks that the new version is running and mock mode is active
 5. **Cleanup**: Removes SSH key from runner
@@ -49,8 +49,7 @@ To test without publishing a release:
 
 **File**: `helm-ci.yml`
 
-Runs `helm lint --strict` and renders the chart with common configuration combinations on every pull request that touches Helm content (and on pushes to `main`). This prevents regressions before they land.
-
+Runs `helm lint --strict` and renders the chart with common configuration combinations on every pull request that touches Helm content (and on pushes to `main` and `release/5.1`). This prevents regressions before they land.
 - Triggered by PRs/pushes touching `deploy/helm/**`, docs, or the workflow itself
 - Uses Helm v3.15.2
 - Renders both the default deployment and an agent-enabled configuration to catch template issues
@@ -59,9 +58,8 @@ Runs `helm lint --strict` and renders the chart with common configuration combin
 
 **File**: `publish-helm-chart.yml`
 
-Packages the Helm chart and pushes it to the GitHub Container Registry (OCI) whenever a GitHub Release is published. Also makes the packaged `.tgz` available as both an Actions artifact and a release asset. The same behaviour can be triggered locally via `./scripts/package-helm-chart.sh <version> [--push]`.
-
-- Triggered automatically on `release: published`, or manually via workflow dispatch (requires `chart_version` input)
+Packages the Helm chart and pushes it to the GitHub Container Registry (OCI) when dispatched by the release pipeline, or manually via workflow dispatch. Also makes the packaged `.tgz` available as both an Actions artifact and a release asset. The same behaviour can be triggered locally via `./scripts/package-helm-chart.sh <version> [--push]`.
+- Triggered by the release pipeline via workflow dispatch, or manually from the Actions tab
 - Chart and app versions mirror the Pulse release tag (e.g., `v4.24.0` → `4.24.0`)
 - Publishes to `oci://ghcr.io/<owner>/pulse-chart`
 - Requires no additional secrets—uses the built-in `GITHUB_TOKEN` with `packages: write` permission

@@ -2,13 +2,18 @@ name: Publish Docker Images
 run-name: Publish Docker Images ${{ inputs.tag }}
 
 # Triggered by create-release.yml after staging images pass tests.
-# Builds multi-arch images (amd64+arm64) from source and publishes to Docker Hub and GHCR.
+# Builds multi-arch images (amd64+arm64) from source, publishes to Docker Hub and GHCR,
+# then dispatches the downstream maintenance-branch workflows that depend on those images.
 on:
   workflow_dispatch:
     inputs:
       tag:
         description: 'Release tag (e.g., v4.34.0)'
         required: true
+        type: string
+      target_branch:
+        description: 'Branch to dispatch downstream workflows on (defaults to the workflow ref)'
+        required: false
         type: string
 
 concurrency:
@@ -46,6 +51,22 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
           echo "Publishing Docker images for ${TAG} (prerelease: ${IS_PRERELEASE})"
+
+      - name: Resolve downstream branch
+        id: target_branch
+        run: |
+          TARGET_BRANCH="${{ inputs.target_branch }}"
+          if [ -z "$TARGET_BRANCH" ]; then
+            TARGET_BRANCH="${GITHUB_REF_NAME}"
+          fi
+
+          if [ -z "$TARGET_BRANCH" ]; then
+            echo "::error::Could not determine downstream target branch"
+            exit 1
+          fi
+
+          echo "branch=${TARGET_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "Using downstream target branch: ${TARGET_BRANCH}"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -129,3 +150,23 @@ jobs:
           if [ "$IS_PRERELEASE" = "true" ]; then
             echo "Note: :latest tags were NOT updated (this is a prerelease)"
           fi
+
+      - name: Trigger floating tag promotion
+        env:
+          GH_TOKEN: ${{ secrets.WORKFLOW_PAT }}
+        run: |
+          gh workflow run promote-floating-tags.yml \
+            --ref "${{ steps.target_branch.outputs.branch }}" \
+            -f tag="${{ steps.version.outputs.tag }}" \
+            -f prerelease="${{ steps.version.outputs.is_prerelease }}"
+          echo "[OK] Floating tag promotion workflow dispatched"
+
+      - name: Trigger Helm Pages release
+        env:
+          GH_TOKEN: ${{ secrets.WORKFLOW_PAT }}
+        run: |
+          gh workflow run helm-pages.yml \
+            --ref "${{ steps.target_branch.outputs.branch }}" \
+            -f chart_version="${{ steps.version.outputs.version }}" \
+            -f target_branch="${{ steps.target_branch.outputs.branch }}"
+          echo "[OK] Helm Pages workflow dispatched"

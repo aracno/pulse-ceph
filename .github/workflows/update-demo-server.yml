@@ -1,8 +1,6 @@
 name: Update Demo Server
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -15,51 +13,24 @@ permissions:
 
 jobs:
   update-demo:
-    # Only run for stable releases (not pre-releases) or manual dispatch
-    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
     runs-on: ubuntu-latest
 
     steps:
       - name: Resolve target tag
         id: target
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG="${{ github.event.release.tag_name }}"
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            echo "::error::tag input is required"
+            exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Skip if not latest published release
-        id: gate
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Confirm deployment target
         run: |
-          TARGET="${{ steps.target.outputs.tag }}"
-          LATEST=$(gh api "repos/${{ github.repository }}/releases?per_page=100" --jq 'map(select(.draft == false and .prerelease == false and (.tag_name | test("^v5\\.1\\.[0-9]+$"))))[0].tag_name')
-          echo "Target tag: $TARGET"
-          echo "Latest published v5.1 tag: $LATEST"
-          if [ "$TARGET" != "$LATEST" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Release is not the latest v5.1 stable release; skipping demo update."
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Check release type
-        if: steps.gate.outputs.skip != 'true'
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual deployment triggered for: ${{ inputs.tag }}"
-          else
-            echo "Release: ${{ github.event.release.tag_name }}"
-            echo "Prerelease: ${{ github.event.release.prerelease }}"
-            echo "Updating demo server to latest stable v5.1 release..."
-          fi
+          echo "Deploying demo server for tag: ${{ steps.target.outputs.tag }}"
 
       - name: Wait for release assets
-        if: steps.gate.outputs.skip != 'true'
         run: |
           TAG="${{ steps.target.outputs.tag }}"
           echo "Waiting for release assets to be available..."
@@ -94,7 +65,6 @@ jobs:
           exit 1
 
       - name: Setup SSH
-        if: steps.gate.outputs.skip != 'true'
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.DEMO_SERVER_SSH_KEY }}" > ~/.ssh/id_ed25519
@@ -102,7 +72,6 @@ jobs:
           ssh-keyscan -H ${{ secrets.DEMO_SERVER_HOST }} >> ~/.ssh/known_hosts
 
       - name: Check current demo version
-        if: steps.gate.outputs.skip != 'true'
         id: current
         run: |
           TARGET="${{ steps.target.outputs.tag }}"
@@ -118,7 +87,7 @@ jobs:
           fi
 
       - name: Update demo server
-        if: steps.gate.outputs.skip != 'true' && steps.current.outputs.skip_current != 'true'
+        if: steps.current.outputs.skip_current != 'true'
         run: |
           TAG="${{ steps.target.outputs.tag }}"
           # Use set -o pipefail to ensure curl errors aren't masked by bash
@@ -126,7 +95,7 @@ jobs:
             "set -o pipefail && curl -fsSL https://raw.githubusercontent.com/rcourtman/Pulse/release/5.1/install.sh | sudo bash -s -- --version $TAG"
 
       - name: Verify update
-        if: steps.gate.outputs.skip != 'true' && steps.current.outputs.skip_current != 'true'
+        if: steps.current.outputs.skip_current != 'true'
         run: |
           # Wait a moment for service to restart
           sleep 5
@@ -160,5 +129,5 @@ jobs:
           fi
 
       - name: Cleanup SSH key
-        if: always() && steps.gate.outputs.skip != 'true'
+        if: always()
         run: rm -f ~/.ssh/id_ed25519

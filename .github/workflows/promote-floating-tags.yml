@@ -1,11 +1,8 @@
 name: Promote Floating Tags
 run-name: Promote Floating Tags ${{ inputs.tag }}
 
-# Triggered automatically when publish-docker.yml completes, or manually
+# Triggered by publish-docker.yml after image publication, or manually.
 on:
-  workflow_run:
-    workflows: ["Publish Docker Images"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
@@ -21,52 +18,22 @@ on:
 jobs:
   promote-images:
     runs-on: ubuntu-latest
-    # Only run if workflow_dispatch OR if workflow_run completed successfully
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     permissions:
       contents: read
       packages: write
 
     steps:
-      - name: Extract tag from trigger
+      - name: Resolve release tag
         id: extract
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # Manual dispatch - use inputs directly
-            TAG="${{ inputs.tag }}"
-            PRERELEASE="${{ inputs.prerelease }}"
-          else
-            # workflow_run trigger - extract from the triggering workflow's inputs
-            # The publish-docker workflow was triggered with a tag input
-            RUN_ID="${{ github.event.workflow_run.id }}"
-            echo "Extracting inputs from workflow run ${RUN_ID}..."
-            
-            # Get the workflow run details to extract the tag
-            WORKFLOW_DATA=$(gh api repos/${{ github.repository }}/actions/runs/${RUN_ID})
-            TAG=$(echo "$WORKFLOW_DATA" | jq -r '.head_branch // ""')
-            
-            # If head_branch is main, we need to get it from the run's inputs
-            # The inputs are stored in the run's display_title or we parse from artifacts
-            if [ "$TAG" = "main" ] || [ -z "$TAG" ]; then
-              # Try to get from run name which typically includes the tag
-              TAG=$(echo "$WORKFLOW_DATA" | jq -r '.display_title' | grep -oP 'v\d+\.\d+\.\d+(-[a-zA-Z]+\.\d+)?' || echo "")
-            fi
-            
-            if [ -z "$TAG" ]; then
-              echo "::error::Could not extract tag from workflow_run"
-              exit 1
-            fi
-            
-            # Detect prerelease from tag
-            if [[ "$TAG" =~ -rc\.[0-9]+$ ]] || [[ "$TAG" =~ -alpha\.[0-9]+$ ]] || [[ "$TAG" =~ -beta\.[0-9]+$ ]]; then
-              PRERELEASE="true"
-            else
-              PRERELEASE="false"
-            fi
+          TAG="${{ inputs.tag }}"
+          PRERELEASE="${{ inputs.prerelease }}"
+
+          if [ -z "$TAG" ]; then
+            echo "::error::tag input is required"
+            exit 1
           fi
-          
+
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "prerelease=${PRERELEASE}" >> $GITHUB_OUTPUT
           echo "Promoting floating tags for ${TAG} (prerelease: ${PRERELEASE})"
@@ -92,7 +59,7 @@ jobs:
           MAX_ATTEMPTS=30
           ATTEMPT=0
           
-          # Wait for main pulse image
+          # Wait for Pulse server image
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             if docker manifest inspect rcourtman/pulse:${TAG} > /dev/null 2>&1; then
               echo "Image rcourtman/pulse:${TAG} is available!"
