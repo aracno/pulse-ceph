@@ -7,6 +7,10 @@ import ArrowRight from 'lucide-solid/icons/arrow-right';
 import Package from 'lucide-solid/icons/package';
 import Download from 'lucide-solid/icons/download';
 import type { UpdateInfo, VersionInfo, UpdatePlan } from '@/api/updates';
+import {
+  V6_RC_ANNOUNCEMENT,
+  isV5ReleaseLine,
+} from '@/constants/releaseAnnouncements';
 
 interface UpdatesSettingsPanelProps {
   versionInfo: Accessor<VersionInfo | null>;
@@ -39,6 +43,60 @@ export const UpdatesSettingsPanel: Component<UpdatesSettingsPanelProps> = (props
       >
         <section class="space-y-4">
           <div class="space-y-4">
+            <Show when={isV5ReleaseLine(props.versionInfo()?.version)}>
+              <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/70 dark:bg-emerald-950/30">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div class="space-y-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="text-sm font-semibold text-emerald-900 dark:text-emerald-100">
+                        Pulse v6 RC testing
+                      </span>
+                      <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-800 dark:bg-emerald-900/70 dark:text-emerald-200">
+                        {V6_RC_ANNOUNCEMENT.tag}
+                      </span>
+                    </div>
+                    <p class="text-sm text-emerald-900/85 dark:text-emerald-100/85">
+                      <code class="rounded bg-emerald-100 px-1 py-0.5 text-[12px] dark:bg-emerald-900/70">
+                        5.1.x
+                      </code>{' '}
+                      remains the stable line. If you can, test v6 in a staging or
+                      non-production environment and use the changelog before upgrading so the
+                      move from v5 is deliberate rather than guesswork.
+                    </p>
+                  </div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <a
+                      href={V6_RC_ANNOUNCEMENT.changelogUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="inline-flex items-center gap-1 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-500"
+                    >
+                      Read v6 changelog
+                      <Download class="w-4 h-4" />
+                    </a>
+                    <a
+                      href={V6_RC_ANNOUNCEMENT.releaseUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="inline-flex items-center gap-1 rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium text-emerald-900 transition-colors hover:bg-emerald-100 dark:border-emerald-800 dark:text-emerald-100 dark:hover:bg-emerald-900/40"
+                    >
+                      View v6 RC
+                      <ArrowRight class="w-4 h-4" />
+                    </a>
+                    <a
+                      href={V6_RC_ANNOUNCEMENT.demoUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-medium text-emerald-800 transition-colors hover:bg-emerald-100 dark:text-emerald-200 dark:hover:bg-emerald-900/30"
+                    >
+                      Open demo
+                      <ArrowRight class="w-4 h-4" />
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </Show>
+
             {/* Version Status Section */}
             <div class="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
               {/* Version Grid */}

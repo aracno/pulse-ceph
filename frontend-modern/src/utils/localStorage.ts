@@ -164,6 +164,7 @@ export const STORAGE_KEYS = {
 
   // Feature discovery
   DISMISSED_FEATURE_TIPS: 'pulse-dismissed-feature-tips',
+  RELEASE_ANNOUNCEMENT_DISMISSED: 'pulse-release-announcement-dismissed',
 
   // GitHub star prompt
   GITHUB_STAR_DISMISSED: 'pulse-github-star-dismissed',

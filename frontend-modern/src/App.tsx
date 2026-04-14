@@ -35,6 +35,7 @@ import { updateStore } from './stores/updates';
 import { UpdateBanner } from './components/UpdateBanner';
 import { DemoBanner } from './components/DemoBanner';
 import { GitHubStarBanner } from './components/GitHubStarBanner';
+import { ReleaseAnnouncementBanner } from './components/ReleaseAnnouncementBanner';
 import { createTooltipSystem } from './components/shared/Tooltip';
 import type { State, Alert } from '@/types/api';
 import { ProxmoxIcon } from '@/components/icons/ProxmoxIcon';
@@ -922,6 +923,10 @@ function App() {
                     <SecurityWarning />
                     <DemoBanner />
                     <UpdateBanner />
+                    <ReleaseAnnouncementBanner
+                      versionInfo={versionInfo}
+                      securityStatus={securityStatus}
+                    />
                     <GitHubStarBanner />
                     <GlobalUpdateProgressWatcher />
                   </Show>
