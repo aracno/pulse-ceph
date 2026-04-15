@@ -42,6 +42,68 @@ test_infer_release_from_archive_name_supports_prerelease() {
   )
 }
 
+test_ensure_update_disk_headroom_fails_when_tmp_and_install_share_full_filesystem() {
+  (
+    load_installer
+
+    UPDATE_MIN_TEMP_FREE_BYTES=$((100 * 1024))
+    UPDATE_MIN_INSTALL_FREE_BYTES=$((80 * 1024))
+
+    print_error() { :; }
+    print_info() { :; }
+    print_warn() { :; }
+    df() {
+      if [[ "$1" == "-Pk" ]]; then
+        case "$2" in
+          /tmp|/opt/pulse)
+            printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
+            printf '/dev/shared 1000 0 150 0%% /\n'
+            return 0
+            ;;
+        esac
+      fi
+      command df "$@"
+    }
+
+    if ensure_update_disk_headroom /tmp /opt/pulse; then
+      echo "ensure_update_disk_headroom unexpectedly passed on a shared full filesystem" >&2
+      return 1
+    fi
+  )
+}
+
+test_ensure_update_disk_headroom_accepts_separate_filesystems_with_sufficient_space() {
+  (
+    load_installer
+
+    UPDATE_MIN_TEMP_FREE_BYTES=$((100 * 1024))
+    UPDATE_MIN_INSTALL_FREE_BYTES=$((80 * 1024))
+
+    print_error() { :; }
+    print_info() { :; }
+    print_warn() { :; }
+    df() {
+      if [[ "$1" == "-Pk" ]]; then
+        case "$2" in
+          /tmp)
+            printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
+            printf '/dev/tmp 1000 0 120 0%% /tmp\n'
+            return 0
+            ;;
+          /opt/pulse)
+            printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
+            printf '/dev/root 1000 0 90 0%% /\n'
+            return 0
+            ;;
+        esac
+      fi
+      command df "$@"
+    }
+
+    ensure_update_disk_headroom /tmp /opt/pulse
+  )
+}
+
 test_download_pulse_installs_from_local_archive_without_network() {
   (
     load_installer
@@ -266,6 +328,8 @@ test_install_additional_agent_binaries_skips_network_when_local_extras_are_missi
 
 main() {
   assert_success "infer_release_from_archive_name parses prerelease tarballs" test_infer_release_from_archive_name_supports_prerelease
+  assert_success "update disk preflight fails on shared low-space filesystems" test_ensure_update_disk_headroom_fails_when_tmp_and_install_share_full_filesystem
+  assert_success "update disk preflight passes on separate filesystems with enough headroom" test_ensure_update_disk_headroom_accepts_separate_filesystems_with_sufficient_space
   assert_success "download_pulse installs from local archive without network" test_download_pulse_installs_from_local_archive_without_network
   assert_success "prefetch helper writes archive path via output variable" test_prefetch_pulse_archive_for_container_sets_output_var
   assert_success "wrong-arch archives fail before replacing the installed binary" test_install_pulse_archive_rejects_mismatched_arch_without_replacing_existing_binary
