@@ -771,6 +771,23 @@ export function Dashboard(props: DashboardProps) {
     return groups;
   });
 
+  // Stable instance-ID list for the group-level <For>. Iterating over
+  // Object.entries() produces brand-new tuple arrays on every refresh, which
+  // Solid's For treats as new items and uses to destroy & recreate the child
+  // rows — blowing away GuestDrawer's activeTab/hover state on each tick.
+  // Strings are compared by value, so a string list keeps the outer For stable
+  // and only the data inside each group updates. See issue #1427.
+  const sortedGroupInstanceIds = createMemo(() => {
+    const instanceLookup = nodeByInstance();
+    return Object.keys(groupedGuests()).sort((instanceIdA, instanceIdB) => {
+      const nodeA = instanceLookup[instanceIdA];
+      const nodeB = instanceLookup[instanceIdB];
+      const labelA = nodeA ? getNodeDisplayName(nodeA) : instanceIdA;
+      const labelB = nodeB ? getNodeDisplayName(nodeB) : instanceIdB;
+      return labelA.localeCompare(labelB) || instanceIdA.localeCompare(instanceIdB);
+    });
+  });
+
   const totalStats = createMemo(() => {
     const guests = filteredGuests();
     const running = guests.filter((g) => g.status === 'running').length;
@@ -1061,23 +1078,18 @@ export function Dashboard(props: DashboardProps) {
                 </thead>
                 <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
                   <For
-                    each={Object.entries(groupedGuests()).sort(([instanceIdA], [instanceIdB]) => {
-                      const nodeA = nodeByInstance()[instanceIdA];
-                      const nodeB = nodeByInstance()[instanceIdB];
-                      const labelA = nodeA ? getNodeDisplayName(nodeA) : instanceIdA;
-                      const labelB = nodeB ? getNodeDisplayName(nodeB) : instanceIdB;
-                      return labelA.localeCompare(labelB) || instanceIdA.localeCompare(instanceIdB);
-                    })}
+                    each={sortedGroupInstanceIds()}
                     fallback={<></>}
                   >
-                    {([instanceId, guests]) => {
-                      const node = nodeByInstance()[instanceId];
+                    {(instanceId) => {
+                      const node = () => nodeByInstance()[instanceId];
+                      const guests = () => groupedGuests()[instanceId] ?? [];
                       return (
                         <>
-                          <Show when={node && groupingMode() === 'grouped'}>
-                            <NodeGroupHeader node={node!} renderAs="tr" colspan={totalColumns()} />
+                          <Show when={node() && groupingMode() === 'grouped'}>
+                            <NodeGroupHeader node={node()!} renderAs="tr" colspan={totalColumns()} />
                           </Show>
-                          <For each={guests} fallback={<></>}>
+                          <For each={guests()} fallback={<></>}>
                             {(guest) => {
                               // Use canonical format: instance:node:vmid
                               const guestId = guest.id || `${guest.instance}:${guest.node}:${guest.vmid}`;
@@ -1087,7 +1099,7 @@ export function Dashboard(props: DashboardProps) {
                                 guestMetadata()[guestId] ||
                                 guestMetadata()[`${guest.instance}:${guest.node}:${guest.vmid}`];
                               // PERFORMANCE: Use pre-computed parent node map instead of resolveParentNode
-                              const parentNode = node ?? guestParentNodeMap().get(guestId);
+                              const parentNode = node() ?? guestParentNodeMap().get(guestId);
                               const parentNodeOnline = parentNode ? isNodeOnline(parentNode) : true;
 
                               return (
