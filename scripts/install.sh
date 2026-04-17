@@ -1705,7 +1705,22 @@ EOF
                 cat >> "$AUTORUN_PATH" <<AUTORUNEOF
 
 ${AUTORUN_MARKER}
-${WRAPPER_SCRIPT} >> /var/log/${AGENT_NAME}.log 2>&1 &
+(
+    _pulse_wrapper="${WRAPPER_SCRIPT}"
+    _pulse_log="/var/log/${AGENT_NAME}.log"
+    _pulse_waited=0
+    _pulse_wait_max=1800
+    while [ ! -x "\$_pulse_wrapper" ] && [ "\$_pulse_waited" -lt "\$_pulse_wait_max" ]; do
+        sleep 2
+        _pulse_waited=\$((_pulse_waited + 2))
+    done
+    if [ -x "\$_pulse_wrapper" ]; then
+        [ "\$_pulse_waited" -gt 0 ] && echo "\$(date '+%Y-%m-%d %H:%M:%S') [pulse-agent-autorun] data volume available after \${_pulse_waited}s" >> "\$_pulse_log"
+        "\$_pulse_wrapper" >> "\$_pulse_log" 2>&1
+    else
+        echo "\$(date '+%Y-%m-%d %H:%M:%S') [pulse-agent-autorun] timed out after \${_pulse_wait_max}s waiting for \$_pulse_wrapper" >> "\$_pulse_log"
+    fi
+) &
 
 AUTORUNEOF
                 chmod +x "$AUTORUN_PATH"
@@ -1726,7 +1741,8 @@ AUTORUNEOF
     if [[ "$AUTORUN_CONFIGURED" != true ]]; then
         log_warn "Could not configure autorun.sh automatically."
         log_warn "To persist across reboots, add the following to your QNAP autorun.sh:"
-        log_warn "  ${WRAPPER_SCRIPT} >> /var/log/${AGENT_NAME}.log 2>&1 &"
+        log_warn "  (w='${WRAPPER_SCRIPT}'; i=0; while [ ! -x \"\$w\" ] && [ \$i -lt 1800 ]; do sleep 2; i=\$((i+2)); done; [ -x \"\$w\" ] && \"\$w\" >> /var/log/${AGENT_NAME}.log 2>&1) &"
+        log_warn "The waiter accommodates encrypted data volumes that unlock after autorun."
         log_warn "See: https://wiki.qnap.com/wiki/Running_Your_Own_Application_at_Startup"
     fi
 
