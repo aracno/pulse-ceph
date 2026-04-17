@@ -330,10 +330,20 @@ func (s *Service) SetStateProvider(sp StateProvider) {
 	// This uses AI to detect applications running in Docker containers
 	// and saves discoveries to the knowledge store for Patrol to use when proposing commands
 	if s.infraDiscoveryService == nil && sp != nil && s.knowledgeStore != nil {
+		discoveryCfg := infradiscovery.DefaultConfig()
+		// Align the infra-discovery cadence with Patrol. Both are AI-driven
+		// background scans; running infra-discovery on a tighter schedule just
+		// wakes local LLMs (e.g. Ollama) every few minutes and keeps models
+		// resident in RAM even when the user scheduled Patrol for once a day.
+		if s.cfg != nil {
+			if patrolInterval := s.cfg.GetPatrolInterval(); patrolInterval > 0 {
+				discoveryCfg.Interval = patrolInterval
+			}
+		}
 		s.infraDiscoveryService = infradiscovery.NewService(
 			sp,
 			s.knowledgeStore,
-			infradiscovery.DefaultConfig(),
+			discoveryCfg,
 		)
 		// Wire the AI service as the analyzer (implements infradiscovery.AIAnalyzer)
 		s.infraDiscoveryService.SetAIAnalyzer(s)
@@ -343,7 +353,9 @@ func (s *Service) SetStateProvider(sp StateProvider) {
 			ctx, cancel := context.WithCancel(context.Background())
 			s.infraDiscoveryCancel = cancel
 			s.infraDiscoveryService.Start(ctx)
-			log.Info().Msg("AI-powered infrastructure discovery service started")
+			log.Info().
+				Dur("interval", discoveryCfg.Interval).
+				Msg("AI-powered infrastructure discovery service started")
 		} else {
 			log.Info().Msg("AI-powered infrastructure discovery initialized (stopped - AI disabled)")
 		}

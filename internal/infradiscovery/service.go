@@ -102,14 +102,14 @@ type Service struct {
 
 // Config holds discovery service configuration.
 type Config struct {
-	Interval    time.Duration // How often to run discovery (default: 5 minutes)
+	Interval    time.Duration // How often to run discovery (default: 24 hours; aligned with Patrol so local LLMs such as Ollama are not woken every 5 minutes)
 	CacheExpiry time.Duration // How long to cache analysis results (default: 1 hour)
 }
 
 // DefaultConfig returns the default discovery configuration.
 func DefaultConfig() Config {
 	return Config{
-		Interval:    5 * time.Minute,
+		Interval:    24 * time.Hour,
 		CacheExpiry: 1 * time.Hour,
 	}
 }
@@ -117,7 +117,7 @@ func DefaultConfig() Config {
 // NewService creates a new infrastructure discovery service.
 func NewService(stateProvider StateProvider, knowledgeStore *knowledge.Store, cfg Config) *Service {
 	if cfg.Interval == 0 {
-		cfg.Interval = 5 * time.Minute
+		cfg.Interval = 24 * time.Hour
 	}
 	if cfg.CacheExpiry == 0 {
 		cfg.CacheExpiry = 1 * time.Hour

@@ -49,8 +49,8 @@ func TestNewService(t *testing.T) {
 		t.Fatal("NewService returned nil")
 	}
 
-	if service.interval != 5*time.Minute {
-		t.Errorf("interval = %v, want 5m", service.interval)
+	if service.interval != 24*time.Hour {
+		t.Errorf("interval = %v, want 24h", service.interval)
 	}
 
 	if service.cacheExpiry != 1*time.Hour {
