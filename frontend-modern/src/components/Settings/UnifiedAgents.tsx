@@ -416,7 +416,7 @@ export const UnifiedAgents: Component = () => {
 
         // Process Docker Agents (merge if same id - indicates same physical machine)
         dockerHosts.forEach(d => {
-            // Use id as key (not hostname) to avoid overwriting 
+            // Use id as key (not hostname) to avoid overwriting
             const key = d.id;
             const existing = unified.get(key);
             if (existing) {
@@ -442,6 +442,31 @@ export const UnifiedAgents: Component = () => {
                     isLegacy: d.isLegacy,
                 });
             }
+        });
+
+        // Fallback merge for unified agents whose host/docker ids diverge on the server
+        // (e.g. when the host path sanitizes the identifier but the docker path does not).
+        // Only merge when exactly one unmerged host and one unmerged docker share the same
+        // hostname — a 1:1 pair — so we never accidentally merge distinct machines that
+        // happen to share a hostname. (#1421)
+        const hostnameCounts = new Map<string, { hostKeys: string[]; dockerKeys: string[] }>();
+        unified.forEach((entry, key) => {
+            const bucket = hostnameCounts.get(entry.hostname) ?? { hostKeys: [], dockerKeys: [] };
+            const isHostOnly = entry.types.length === 1 && entry.types[0] === 'host';
+            const isDockerOnly = entry.types.length === 1 && entry.types[0] === 'docker';
+            if (isHostOnly) bucket.hostKeys.push(key);
+            else if (isDockerOnly) bucket.dockerKeys.push(key);
+            hostnameCounts.set(entry.hostname, bucket);
+        });
+        hostnameCounts.forEach(({ hostKeys, dockerKeys }) => {
+            if (hostKeys.length !== 1 || dockerKeys.length !== 1) return;
+            const hostEntry = unified.get(hostKeys[0]);
+            const dockerEntry = unified.get(dockerKeys[0]);
+            if (!hostEntry || !dockerEntry) return;
+            hostEntry.types = ['host', 'docker'];
+            if (!hostEntry.version && dockerEntry.version) hostEntry.version = dockerEntry.version;
+            if (dockerEntry.isLegacy) hostEntry.isLegacy = true;
+            unified.delete(dockerKeys[0]);
         });
 
         // Preserve previously seen types to prevent flapping
