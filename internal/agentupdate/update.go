@@ -39,6 +39,9 @@ var (
 	unameCommand                 = func() ([]byte, error) { return exec.Command("uname", "-m").Output() }
 	unraidVersionPath            = "/etc/unraid-version"
 	unraidPersistentPathFn       = unraidPersistentPath
+	qnapMarkerPaths              = []string{"/sbin/getcfg", "/etc/config/qpkg.conf"}
+	qnapVolumeCandidates         = []string{"/share/CACHEDEV1_DATA", "/share/CACHEDEV2_DATA", "/share/MD0_DATA"}
+	qnapPersistentPathFn         = qnapPersistentPath
 	restartProcessFn             = restartProcess
 	osExecutableFn               = os.Executable
 	evalSymlinksFn               = filepath.EvalSymlinks
@@ -314,6 +317,33 @@ func unraidPersistentPath(agentName string) string {
 	return fmt.Sprintf("/boot/config/plugins/%s/%s", agentName, agentName)
 }
 
+// isQnap reports whether the current system is running QNAP QTS/QuTS hero.
+// Detection matches scripts/install.sh (getcfg binary or qpkg.conf presence).
+func isQnap() bool {
+	for _, marker := range qnapMarkerPaths {
+		if _, err := os.Stat(marker); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// qnapPersistentPath returns the persistent binary path on QNAP, or empty if none
+// is discoverable. The installer writes the binary to ${QNAP_VOL}/.pulse-agent/<name>
+// because /usr/local/bin is a tiny RAM disk that gets wiped on every reboot; the
+// boot wrapper copies the stored binary back into place on each start. Without
+// also refreshing the stored copy, auto-updates applied to /usr/local/bin are
+// silently reverted at the next reboot.
+func qnapPersistentPath(agentName string) string {
+	for _, vol := range qnapVolumeCandidates {
+		path := filepath.Join(vol, ".pulse-agent", agentName)
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
 // performUpdate downloads and installs the new agent binary.
 func (u *Updater) performUpdate(ctx context.Context) error {
 	execPath, err := osExecutableFn()
@@ -473,6 +503,33 @@ func (u *Updater) performUpdateWithExecPath(ctx context.Context, execPath string
 					os.Remove(tmpPersist)
 				} else {
 					u.logger.Info().Str("path", persistPath).Msg("Updated Unraid persistent binary")
+				}
+			}
+		}
+	}
+
+	// On QNAP, also refresh the persistent copy on the data volume. /usr/local/bin
+	// is a RAM disk that is wiped on reboot; the boot wrapper copies the stored
+	// binary back into place. Without this step, an in-place update to the RAM
+	// disk is silently reverted on the next reboot. If the running binary already
+	// *is* the persistent copy (fallback mode), the atomic rename above was enough.
+	if isQnap() {
+		persistPath := qnapPersistentPathFn(u.cfg.AgentName)
+		if persistPath != "" && persistPath != realExecPath {
+			u.logger.Debug().Str("path", persistPath).Msg("Updating QNAP persistent binary")
+
+			newBinary, err := readFileFn(execPath)
+			if err != nil {
+				u.logger.Warn().Err(err).Msg("Failed to read new binary for QNAP persistence")
+			} else {
+				tmpPersist := persistPath + ".tmp"
+				if err := writeFileFn(tmpPersist, newBinary, 0755); err != nil {
+					u.logger.Warn().Err(err).Msg("Failed to write QNAP persistent binary")
+				} else if err := renameFn(tmpPersist, persistPath); err != nil {
+					u.logger.Warn().Err(err).Msg("Failed to rename QNAP persistent binary")
+					os.Remove(tmpPersist)
+				} else {
+					u.logger.Info().Str("path", persistPath).Msg("Updated QNAP persistent binary")
 				}
 			}
 		}

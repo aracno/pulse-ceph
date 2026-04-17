@@ -951,6 +951,167 @@ func TestPerformUpdateErrors(t *testing.T) {
 	})
 }
 
+func TestIsQnapOverride(t *testing.T) {
+	origMarkers := qnapMarkerPaths
+	t.Cleanup(func() { qnapMarkerPaths = origMarkers })
+
+	tmpDir := t.TempDir()
+	marker := filepath.Join(tmpDir, "getcfg")
+	qnapMarkerPaths = []string{marker}
+
+	if isQnap() {
+		t.Fatalf("expected false when marker missing")
+	}
+	if err := os.WriteFile(marker, []byte("x"), 0755); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	if !isQnap() {
+		t.Fatalf("expected true when marker exists")
+	}
+}
+
+func TestQnapPersistentPath(t *testing.T) {
+	origCandidates := qnapVolumeCandidates
+	t.Cleanup(func() { qnapVolumeCandidates = origCandidates })
+
+	tmpDir := t.TempDir()
+	volA := filepath.Join(tmpDir, "CACHEDEV1_DATA")
+	volB := filepath.Join(tmpDir, "CACHEDEV2_DATA")
+	qnapVolumeCandidates = []string{volA, volB}
+
+	if got := qnapPersistentPath("pulse-agent"); got != "" {
+		t.Fatalf("expected empty when no candidate has binary, got %q", got)
+	}
+
+	storeDir := filepath.Join(volB, ".pulse-agent")
+	if err := os.MkdirAll(storeDir, 0755); err != nil {
+		t.Fatalf("mkdir store: %v", err)
+	}
+	stored := filepath.Join(storeDir, "pulse-agent")
+	if err := os.WriteFile(stored, []byte("stored"), 0755); err != nil {
+		t.Fatalf("write stored: %v", err)
+	}
+
+	if got := qnapPersistentPath("pulse-agent"); got != stored {
+		t.Fatalf("expected %q, got %q", stored, got)
+	}
+}
+
+func TestPerformUpdateQnapPaths(t *testing.T) {
+	data := testBinary()
+	check := checksum(data)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Checksum-Sha256", check)
+		_, _ = w.Write(data)
+	}))
+	t.Cleanup(server.Close)
+
+	_, execPath := writeTempExec(t)
+	u := newUpdaterForTest(server.URL)
+	u.client = server.Client()
+
+	origMarkers := qnapMarkerPaths
+	origPersist := qnapPersistentPathFn
+	origRead := readFileFn
+	origWrite := writeFileFn
+	origRename := renameFn
+	origRestart := restartProcessFn
+	t.Cleanup(func() {
+		qnapMarkerPaths = origMarkers
+		qnapPersistentPathFn = origPersist
+		readFileFn = origRead
+		writeFileFn = origWrite
+		renameFn = origRename
+		restartProcessFn = origRestart
+	})
+
+	tmpDir := t.TempDir()
+	marker := filepath.Join(tmpDir, "getcfg")
+	if err := os.WriteFile(marker, []byte("x"), 0755); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	qnapMarkerPaths = []string{marker}
+
+	persistDir := filepath.Join(tmpDir, "persist")
+	if err := os.MkdirAll(persistDir, 0755); err != nil {
+		t.Fatalf("mkdir persist: %v", err)
+	}
+	persistPath := filepath.Join(persistDir, "pulse-agent")
+	if err := os.WriteFile(persistPath, []byte("old"), 0755); err != nil {
+		t.Fatalf("write persist: %v", err)
+	}
+	qnapPersistentPathFn = func(string) string { return persistPath }
+	restartProcessFn = func(string) error { return nil }
+
+	t.Run("ReadError", func(t *testing.T) {
+		readFileFn = func(string) ([]byte, error) { return nil, errors.New("read fail") }
+		if err := u.performUpdateWithExecPath(context.Background(), execPath); err != nil {
+			t.Fatalf("expected update success, got %v", err)
+		}
+	})
+
+	t.Run("WriteError", func(t *testing.T) {
+		readFileFn = func(string) ([]byte, error) { return []byte("new"), nil }
+		writeFileFn = func(string, []byte, os.FileMode) error { return errors.New("write fail") }
+		if err := u.performUpdateWithExecPath(context.Background(), execPath); err != nil {
+			t.Fatalf("expected update success, got %v", err)
+		}
+	})
+
+	t.Run("RenameError", func(t *testing.T) {
+		readFileFn = func(string) ([]byte, error) { return []byte("new"), nil }
+		writeFileFn = os.WriteFile
+		renameFn = func(oldPath, newPath string) error {
+			if newPath == persistPath {
+				return errors.New("rename fail")
+			}
+			return os.Rename(oldPath, newPath)
+		}
+		if err := u.performUpdateWithExecPath(context.Background(), execPath); err != nil {
+			t.Fatalf("expected update success, got %v", err)
+		}
+	})
+
+	t.Run("Success", func(t *testing.T) {
+		readFileFn = func(string) ([]byte, error) { return data, nil }
+		writeFileFn = os.WriteFile
+		renameFn = os.Rename
+		if err := u.performUpdateWithExecPath(context.Background(), execPath); err != nil {
+			t.Fatalf("expected update success, got %v", err)
+		}
+		got, err := os.ReadFile(persistPath)
+		if err != nil {
+			t.Fatalf("read persist: %v", err)
+		}
+		if !bytes.Equal(got, data) {
+			t.Fatalf("persistent binary not refreshed: got %q", got)
+		}
+	})
+
+	t.Run("SkipWhenPersistMatchesExec", func(t *testing.T) {
+		realExecPath, err := filepath.EvalSymlinks(execPath)
+		if err != nil {
+			t.Fatalf("eval symlinks: %v", err)
+		}
+		readCalled := false
+		readFileFn = func(string) ([]byte, error) {
+			readCalled = true
+			return data, nil
+		}
+		writeFileFn = os.WriteFile
+		renameFn = os.Rename
+		qnapPersistentPathFn = func(string) string { return realExecPath }
+		t.Cleanup(func() { qnapPersistentPathFn = func(string) string { return persistPath } })
+		if err := u.performUpdateWithExecPath(context.Background(), execPath); err != nil {
+			t.Fatalf("expected update success, got %v", err)
+		}
+		if readCalled {
+			t.Fatalf("expected QNAP branch to be skipped when persist path == exec path")
+		}
+	})
+}
+
 func TestPerformUpdateUnraidPaths(t *testing.T) {
 	data := testBinary()
 	check := checksum(data)
