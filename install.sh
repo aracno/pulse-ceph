@@ -173,6 +173,24 @@ get_latest_release_from_redirect() {
     return 0
 }
 
+read_configured_update_channel() {
+    if [[ "${IGNORE_CONFIGURED_UPDATE_CHANNEL:-false}" == "true" ]]; then
+        return 1
+    fi
+
+    if [[ ! -f "$CONFIG_DIR/system.json" ]]; then
+        return 1
+    fi
+
+    local configured_channel=""
+    configured_channel=$(grep -o '"updateChannel"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_DIR/system.json" 2>/dev/null | sed 's/.*"\([^"]*\)"$/\1/' || true)
+    if [[ -z "$configured_channel" ]]; then
+        return 1
+    fi
+
+    printf '%s\n' "$configured_channel"
+}
+
 maintenance_raw_url() {
     local path="$1"
     printf 'https://raw.githubusercontent.com/%s/%s/%s\n' "$GITHUB_REPO" "$SOURCE_BRANCH" "$path"
@@ -821,6 +839,12 @@ create_lxc_container() {
             ADVANCED_MODE=false
             ;;
     esac
+
+    # A Proxmox-host LXC install creates a brand-new Pulse instance inside the
+    # container. Host-local Pulse config must not silently switch that fresh
+    # install onto the prerelease channel unless the operator explicitly asked
+    # for it via --rc or --version.
+    IGNORE_CONFIGURED_UPDATE_CHANNEL=true
     
     # Get next available container ID from Proxmox
     local CTID=$(pvesh get /cluster/nextid 2>/dev/null || echo "100")
@@ -2415,8 +2439,8 @@ resolve_target_release() {
         if [[ -n "${FORCE_CHANNEL}" ]]; then
             UPDATE_CHANNEL="${FORCE_CHANNEL}"
             print_info "Using $UPDATE_CHANNEL channel from command line"
-        elif [[ -f "$CONFIG_DIR/system.json" ]]; then
-            CONFIGURED_CHANNEL=$(cat "$CONFIG_DIR/system.json" 2>/dev/null | grep -o '"updateChannel"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' || true)
+        else
+            CONFIGURED_CHANNEL=$(read_configured_update_channel 2>/dev/null || true)
             if [[ "$CONFIGURED_CHANNEL" == "rc" ]]; then
                 UPDATE_CHANNEL="rc"
                 print_info "RC channel detected in configuration"
@@ -3745,8 +3769,8 @@ main() {
         # Allow override via command line
         if [[ -n "${FORCE_CHANNEL}" ]]; then
             UPDATE_CHANNEL="${FORCE_CHANNEL}"
-        elif [[ -f "$CONFIG_DIR/system.json" ]]; then
-            CONFIGURED_CHANNEL=$(cat "$CONFIG_DIR/system.json" 2>/dev/null | grep -o '"updateChannel"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/' || true)
+        else
+            CONFIGURED_CHANNEL=$(read_configured_update_channel 2>/dev/null || true)
             if [[ "$CONFIGURED_CHANNEL" == "rc" ]]; then
                 UPDATE_CHANNEL="rc"
             fi

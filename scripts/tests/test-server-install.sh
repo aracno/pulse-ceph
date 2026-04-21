@@ -176,6 +176,42 @@ test_prefetch_pulse_archive_for_container_sets_output_var() {
   )
 }
 
+test_resolve_target_release_ignores_host_configured_rc_channel_when_requested() {
+  (
+    load_installer
+
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    CONFIG_DIR="${tmpdir}/etc/pulse"
+    mkdir -p "${CONFIG_DIR}"
+    cat > "${CONFIG_DIR}/system.json" <<'EOF'
+{"updateChannel":"rc"}
+EOF
+
+    IGNORE_CONFIGURED_UPDATE_CHANNEL=true
+    FORCE_VERSION=""
+    FORCE_CHANNEL=""
+    UPDATE_CHANNEL=""
+    LATEST_RELEASE=""
+
+    curl() {
+      cat <<'EOF'
+[
+  {"tag_name":"v6.0.0-rc.2","draft":false,"prerelease":true},
+  {"tag_name":"v5.1.28","draft":false,"prerelease":false}
+]
+EOF
+    }
+
+    resolve_target_release >/dev/null
+
+    [[ "${UPDATE_CHANNEL}" == "stable" ]]
+    [[ "${LATEST_RELEASE}" == "v5.1.28" ]]
+
+    rm -rf "${tmpdir}"
+  )
+}
+
 test_install_pulse_archive_rejects_mismatched_arch_without_replacing_existing_binary() {
   (
     load_installer
@@ -332,6 +368,7 @@ main() {
   assert_success "update disk preflight passes on separate filesystems with enough headroom" test_ensure_update_disk_headroom_accepts_separate_filesystems_with_sufficient_space
   assert_success "download_pulse installs from local archive without network" test_download_pulse_installs_from_local_archive_without_network
   assert_success "prefetch helper writes archive path via output variable" test_prefetch_pulse_archive_for_container_sets_output_var
+  assert_success "resolve_target_release ignores host-configured rc during fresh LXC bootstrap" test_resolve_target_release_ignores_host_configured_rc_channel_when_requested
   assert_success "wrong-arch archives fail before replacing the installed binary" test_install_pulse_archive_rejects_mismatched_arch_without_replacing_existing_binary
   assert_success "parse_args rejects archive with source builds" test_parse_args_rejects_archive_with_source
   assert_success "installer supports curl-pipe execution via bash stdin" test_installer_runs_when_streamed_over_stdin
