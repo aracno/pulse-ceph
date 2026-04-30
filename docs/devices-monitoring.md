@@ -28,9 +28,9 @@ Checks can be edited in place from Settings. Ping checks intentionally do not ha
 
 The `Devices` tab contains an `Add device` wizard. The wizard first selects one configured check, then captures device identity and address details. Added devices are shown in the Devices inventory with source-aware health cards.
 
-For UniFi checks, Settings exposes official API profiles from the UniFi Site Manager API documentation. The device wizard can query the official endpoint `GET https://api.ui.com/v1/devices` using the configured `X-API-Key`, then use the returned device list to prefill identity, model, site, and address fields.
+For UniFi checks, Settings exposes official API profiles from the UniFi Site Manager API documentation. The device wizard queries Pulse at `/api/devices/unifi/proxy`; the backend then calls the official endpoint `GET https://api.ui.com/v1/devices` using the configured `X-API-Key`. This avoids browser CORS failures and keeps the wizard workflow identical for the user.
 
-Device state is refreshed automatically from the selected check interval. Ping and SNMP checks currently use a browser-side state simulation until backend collectors exist. UniFi checks use the real Site Manager device list when an API key is present, with a warning state if a configured device is no longer returned.
+Device state is refreshed automatically from the selected check interval. Ping and SNMP checks currently use a browser-side state simulation until backend collectors exist. UniFi checks use the backend Site Manager proxy when an API key is present, with a warning state if a configured device is no longer returned.
 
 The current UI persists this draft configuration in browser local storage so the workflow is usable while the backend collector is being built. Production polling should move check storage to the backend secret store before real credentials are used.
 
@@ -61,6 +61,13 @@ Useful endpoints:
 Authentication uses the `X-API-Key` header. Responses are wrapped in a standard object with `data`, `httpStatusCode`, and `traceId`.
 
 The API notes that some nested structures can vary by UniFi OS or Network Server version, so the collector should parse defensively and ignore unknown fields.
+
+Pulse intentionally exposes only an allowlisted UniFi proxy surface:
+
+- Host: `https://api.ui.com`
+- Endpoints: `/v1/devices`, `/v1/hosts`, `/v1/sites`, and the current EA ISP metrics windows.
+
+This is enough for discovery and basic monitoring while avoiding a generic server-side request proxy.
 
 ## SNMP
 

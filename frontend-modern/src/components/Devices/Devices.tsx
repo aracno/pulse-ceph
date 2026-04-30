@@ -5,6 +5,7 @@ import {
   type DeviceAccountType,
   type DeviceInventoryItem,
 } from '@/stores/devicesMonitoring';
+import { apiFetchJSON } from '@/utils/apiClient';
 import Activity from 'lucide-solid/icons/activity';
 import AlertTriangle from 'lucide-solid/icons/alert-triangle';
 import CheckCircle2 from 'lucide-solid/icons/check-circle-2';
@@ -207,17 +208,14 @@ export const Devices: Component = () => {
     setUnifiLoading(true);
     setUnifiError('');
     try {
-      const baseUrl = (account.host || 'https://api.ui.com').replace(/\/+$/, '');
-      const response = await fetch(`${baseUrl}/v1/devices`, {
-        headers: {
-          Accept: 'application/json',
-          'X-API-Key': account.apiKey,
-        },
+      const payload = await apiFetchJSON<unknown>('/api/devices/unifi/proxy', {
+        method: 'POST',
+        body: JSON.stringify({
+          baseUrl: account.host || 'https://api.ui.com',
+          endpoint: '/v1/devices',
+          apiKey: account.apiKey,
+        }),
       });
-      if (!response.ok) {
-        throw new Error(`UniFi API returned HTTP ${response.status}`);
-      }
-      const payload = await response.json();
       const devices = normalizeUnifiDevices(payload);
       setUnifiDevices(devices);
       if (devices.length === 0) {
@@ -228,8 +226,8 @@ export const Devices: Component = () => {
       const message =
         error instanceof Error
           ? error.message
-          : 'Unable to query UniFi Site Manager API from this browser session.';
-      setUnifiError(`${message}. If this is a CORS/network error, the backend proxy collector will be required.`);
+          : 'Unable to query UniFi Site Manager API through Pulse backend.';
+      setUnifiError(message);
       return [];
     } finally {
       setUnifiLoading(false);
@@ -511,7 +509,7 @@ export const Devices: Component = () => {
                         <div>
                           <div class="text-sm font-semibold text-blue-900 dark:text-blue-100">UniFi API discovery</div>
                           <div class="mt-1 text-xs text-blue-800 dark:text-blue-200">
-                            Query `GET /v1/devices` with the selected UniFi check and select a returned device.
+                            Pulse queries `GET /v1/devices` with the selected UniFi check and returns discovered devices.
                           </div>
                         </div>
                         <button
