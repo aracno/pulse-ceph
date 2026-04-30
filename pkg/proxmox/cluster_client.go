@@ -1152,6 +1152,20 @@ func (cc *ClusterClient) GetNodeCephOSDs(ctx context.Context, node string) ([]Ce
 	return result, err
 }
 
+// GetNodeCephOSDMetadata returns OSD metadata through a specific node with failover support.
+func (cc *ClusterClient) GetNodeCephOSDMetadata(ctx context.Context, node string, osdID int) (*CephOSDMetadata, error) {
+	var result *CephOSDMetadata
+	err := cc.executeWithFailover(ctx, func(client *Client) error {
+		metadata, err := client.GetNodeCephOSDMetadata(ctx, node, osdID)
+		if err != nil {
+			return err
+		}
+		result = metadata
+		return nil
+	})
+	return result, err
+}
+
 func (cc *ClusterClient) GetVMSnapshots(ctx context.Context, node string, vmid int) ([]Snapshot, error) {
 	var result []Snapshot
 	err := cc.executeWithFailover(ctx, func(client *Client) error {
