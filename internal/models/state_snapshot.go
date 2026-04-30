@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // StateSnapshot represents a snapshot of the state without mutex
 type StateSnapshot struct {
@@ -109,6 +112,102 @@ func (s *State) GetSnapshot() StateSnapshot {
 	}
 
 	return snapshot
+}
+
+// MergeLinkedHostDisksIntoGuests supplements the filesystem listings of VMs
+// and containers with disks reported by a unified pulse-agent running
+// inside the same guest (matched via Host.LinkedVMID / LinkedContainerID).
+//
+// The qemu-guest-agent's get-fsinfo can miss filesystems on certain guest
+// configurations (notably ZFS mounts on PBS — see #1438), but the unified
+// pulse-agent has direct OS-level visibility through hostmetrics. When a
+// Host is linked to a guest, this method appends the host agent's Disks
+// (deduped by mountpoint) to the guest's Disks slice and updates the
+// guest's aggregate Disk usage to include the new partitions.
+//
+// Disks already present on the guest from the qemu-guest-agent path take
+// precedence; we only add host-agent entries for mountpoints the guest
+// doesn't already list.
+func (s *StateSnapshot) MergeLinkedHostDisksIntoGuests() {
+	if s == nil || len(s.Hosts) == 0 {
+		return
+	}
+
+	hostByVMID := make(map[string]*Host)
+	hostByContainerID := make(map[string]*Host)
+	for i := range s.Hosts {
+		h := &s.Hosts[i]
+		if id := strings.TrimSpace(h.LinkedVMID); id != "" {
+			hostByVMID[id] = h
+		}
+		if id := strings.TrimSpace(h.LinkedContainerID); id != "" {
+			hostByContainerID[id] = h
+		}
+	}
+
+	if len(hostByVMID) > 0 {
+		for i := range s.VMs {
+			mergeHostDisksIntoGuest(&s.VMs[i].Disk, &s.VMs[i].Disks, hostByVMID[s.VMs[i].ID])
+		}
+	}
+	if len(hostByContainerID) > 0 {
+		for i := range s.Containers {
+			mergeHostDisksIntoGuest(&s.Containers[i].Disk, &s.Containers[i].Disks, hostByContainerID[s.Containers[i].ID])
+		}
+	}
+}
+
+// mergeHostDisksIntoGuest is the shared body of MergeLinkedHostDisksIntoGuests
+// for a single VM or container. It mutates *guestDisks and *guestAggregate in
+// place when the linked host reports filesystems the guest does not.
+func mergeHostDisksIntoGuest(guestAggregate *Disk, guestDisks *[]Disk, host *Host) {
+	if host == nil || len(host.Disks) == 0 || guestDisks == nil {
+		return
+	}
+
+	existingMounts := make(map[string]struct{}, len(*guestDisks))
+	for _, d := range *guestDisks {
+		mp := strings.TrimSpace(d.Mountpoint)
+		if mp != "" {
+			existingMounts[mp] = struct{}{}
+		}
+	}
+
+	var added []Disk
+	for _, d := range host.Disks {
+		mp := strings.TrimSpace(d.Mountpoint)
+		if mp == "" {
+			continue
+		}
+		if _, dup := existingMounts[mp]; dup {
+			continue
+		}
+		existingMounts[mp] = struct{}{}
+		added = append(added, d)
+	}
+
+	if len(added) == 0 {
+		return
+	}
+
+	merged := make([]Disk, 0, len(*guestDisks)+len(added))
+	merged = append(merged, *guestDisks...)
+	merged = append(merged, added...)
+	*guestDisks = merged
+
+	if guestAggregate == nil {
+		return
+	}
+	for _, d := range added {
+		if d.Total > 0 {
+			guestAggregate.Total += d.Total
+			guestAggregate.Used += d.Used
+			guestAggregate.Free += d.Free
+		}
+	}
+	if guestAggregate.Total > 0 {
+		guestAggregate.Usage = float64(guestAggregate.Used) / float64(guestAggregate.Total) * 100
+	}
 }
 
 // ResourceLocation describes where a resource lives in the infrastructure hierarchy.

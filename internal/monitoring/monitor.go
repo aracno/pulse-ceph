@@ -9896,6 +9896,10 @@ func (m *Monitor) GetState() models.StateSnapshot {
 	// explicit sync points, so APIs do not expose stale alert counts/attachments.
 	state.ActiveAlerts = m.currentModelAlerts()
 	state.RecentlyResolved = m.currentRecentlyResolvedAlerts()
+	// Surface filesystems reported by a unified pulse-agent inside a guest
+	// (e.g. ZFS mounts that qemu-guest-agent's get-fsinfo cannot see on PBS,
+	// #1438) in the guest's VM/Container Overview disk listing.
+	state.MergeLinkedHostDisksIntoGuests()
 	return state
 }
 
