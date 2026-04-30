@@ -1176,17 +1176,17 @@ function AppLayout(props: {
         alwaysShow: true, // Proxmox is the default, always show
       },
       {
-        id: 'devices' as const,
-        label: 'Devices',
-        route: '/devices',
-        settingsRoute: '/settings/devices',
-        tooltip: 'Monitor network devices, UniFi gear, routers, switches, and modems',
-        enabled: true,
-        live: hasDevices(),
+        id: 'hosts' as const,
+        label: 'Hosts',
+        route: '/hosts',
+        settingsRoute: '/settings/host-agents',
+        tooltip: 'Monitor hosts with the host agent',
+        enabled: hasHosts() || !!seenPlatforms()['hosts'],
+        live: hasHosts(),
         icon: (
-          <NetworkIcon class="w-4 h-4 shrink-0" />
+          <MonitorIcon class="w-4 h-4 shrink-0" />
         ),
-        alwaysShow: true,
+        alwaysShow: true, // Hosts is commonly used, keep visible
       },
       {
         id: 'kubernetes' as const,
@@ -1202,17 +1202,17 @@ function AppLayout(props: {
         alwaysShow: false, // Only show when clusters exist
       },
       {
-        id: 'hosts' as const,
-        label: 'Hosts',
-        route: '/hosts',
-        settingsRoute: '/settings/host-agents',
-        tooltip: 'Monitor hosts with the host agent',
-        enabled: hasHosts() || !!seenPlatforms()['hosts'],
-        live: hasHosts(),
+        id: 'devices' as const,
+        label: 'Devices',
+        route: '/devices',
+        settingsRoute: '/settings/devices',
+        tooltip: 'Monitor network devices, UniFi gear, routers, switches, and modems',
+        enabled: true,
+        live: hasDevices(),
         icon: (
-          <MonitorIcon class="w-4 h-4 shrink-0" />
+          <NetworkIcon class="w-4 h-4 shrink-0" />
         ),
-        alwaysShow: true, // Hosts is commonly used, keep visible
+        alwaysShow: true,
       },
     ];
 
