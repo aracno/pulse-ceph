@@ -341,9 +341,38 @@ export function UpdateProgressModal(props: UpdateProgressModalProps) {
     return currentStatus.message || 'Updating...';
   };
 
+  // The modal must always have a working close path, even mid-update.
+  // Without this, an update that crashes before reporting a terminal status,
+  // or a dropped SSE/polling connection, leaves the backdrop visible with
+  // no way to dismiss the modal except a hard browser refresh — the user
+  // sees a "blacked out" page they cannot interact with. The update
+  // process itself runs server-side and is unaffected by the modal's
+  // visibility; GlobalUpdateProgressWatcher continues to track progress
+  // independently, so closing here does not abort the update.
+  createEffect(() => {
+    if (!props.isOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        props.onClose();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    onCleanup(() => document.removeEventListener('keydown', onKey));
+  });
+
   return (
     <Show when={props.isOpen}>
-      <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div
+        class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+        onClick={(event) => {
+          // Close only when the click landed on the backdrop itself, not
+          // when it bubbled up from the modal content.
+          if (event.target === event.currentTarget) {
+            props.onClose();
+          }
+        }}
+      >
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full">
           {/* Header */}
           <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
@@ -351,16 +380,17 @@ export function UpdateProgressModal(props: UpdateProgressModalProps) {
               <h2 class="text-xl font-semibold text-gray-900 dark:text-gray-100">
                 Updating Pulse
               </h2>
-              <Show when={isComplete()}>
-                <button
-                  onClick={props.onClose}
-                  class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                >
-                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </Show>
+              <button
+                type="button"
+                onClick={props.onClose}
+                class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                aria-label={isComplete() ? 'Close' : 'Hide; update continues in background'}
+                title={isComplete() ? 'Close' : 'Hide (update continues in the background)'}
+              >
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
           </div>
 
