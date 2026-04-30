@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -123,6 +126,25 @@ func run(ctx context.Context, args []string, getenv func(string) string) error {
 	// 2b. Compute Agent ID if missing (needed for remote config)
 	// We replicate the logic from hostagent.New to ensure we get the same ID
 	lookupHostname := strings.TrimSpace(cfg.HostnameOverride)
+	// Prefer a persisted ID from --agent-id-file if the file is configured
+	// and exists. This is what prevents Docker-container restarts from
+	// breaking the server's bound-token agent association (#1447): the user
+	// mounts the file as a volume, the agent reads its prior ID on each
+	// start, and the server keeps recognising it.
+	if cfg.AgentID == "" && cfg.AgentIDFile != "" {
+		if persisted, err := readAgentIDFile(cfg.AgentIDFile); err == nil && persisted != "" {
+			cfg.AgentID = persisted
+			logger.Info().
+				Str("path", cfg.AgentIDFile).
+				Str("agentID", cfg.AgentID).
+				Msg("Loaded persisted agent ID")
+		} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			logger.Warn().
+				Err(err).
+				Str("path", cfg.AgentIDFile).
+				Msg("Failed to read agent-id-file; will fall back to machine-id and rewrite the file")
+		}
+	}
 	if cfg.AgentID == "" {
 		// Use a short timeout for host info
 		hCtx, hCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -141,6 +163,17 @@ func run(ctx context.Context, args []string, getenv func(string) string) error {
 			}
 		} else {
 			logger.Warn().Err(err).Msg("Failed to fetch host info for Agent ID generation")
+		}
+	}
+	// Persist the resolved ID for next run if the file is configured but did
+	// not yet exist (or held a different value). Subsequent restarts will
+	// then read from the file and skip machine-id detection entirely.
+	if cfg.AgentID != "" && cfg.AgentIDFile != "" {
+		if err := writeAgentIDFile(cfg.AgentIDFile, cfg.AgentID); err != nil {
+			logger.Warn().
+				Err(err).
+				Str("path", cfg.AgentIDFile).
+				Msg("Failed to persist agent ID; ID will be re-derived on next start")
 		}
 	}
 	if lookupHostname == "" {
@@ -392,6 +425,64 @@ func run(ctx context.Context, args []string, getenv func(string) string) error {
 	return nil
 }
 
+// readAgentIDFile reads a persisted agent identifier from the given path.
+// Returns the trimmed contents on success, an empty string + nil if the file
+// is empty, or an error wrapping fs.ErrNotExist when the file is missing
+// (callers can use errors.Is to distinguish first-start from broken state).
+func readAgentIDFile(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// writeAgentIDFile persists the agent identifier to disk so a future restart
+// of the same agent can re-use it. The file is written atomically (write to
+// tmp + rename) so a crash mid-write cannot leave a half-truncated file.
+// Parent directories are created if missing. Permissions are 0600 because
+// the value is a long-lived identity tied to the agent's auth token; world
+// readability is unnecessary.
+func writeAgentIDFile(path, id string) error {
+	if path == "" || id == "" {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create agent-id-file directory: %w", err)
+		}
+	}
+	tmp, err := os.CreateTemp(dir, ".agent-id-*")
+	if err != nil {
+		return fmt.Errorf("create agent-id-file temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	if _, err := tmp.WriteString(id + "\n"); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("write agent-id-file: %w", err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("chmod agent-id-file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("close agent-id-file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		cleanup()
+		return fmt.Errorf("rename agent-id-file: %w", err)
+	}
+	return nil
+}
+
 func cleanupDockerAgent(agent RunnableCloser, logger *zerolog.Logger) {
 	if agent == nil || reflect.ValueOf(agent).IsNil() {
 		return
@@ -458,6 +549,7 @@ type Config struct {
 	Interval           time.Duration
 	HostnameOverride   string
 	AgentID            string
+	AgentIDFile        string
 	Tags               []string
 	InsecureSkipVerify bool
 	LogLevel           zerolog.Level
@@ -507,6 +599,7 @@ func loadConfig(args []string, getenv func(string) string) (Config, error) {
 	envInterval := strings.TrimSpace(getenv("PULSE_INTERVAL"))
 	envHostname := strings.TrimSpace(getenv("PULSE_HOSTNAME"))
 	envAgentID := strings.TrimSpace(getenv("PULSE_AGENT_ID"))
+	envAgentIDFile := strings.TrimSpace(getenv("PULSE_AGENT_ID_FILE"))
 	envInsecure := strings.TrimSpace(getenv("PULSE_INSECURE_SKIP_VERIFY"))
 	envTags := strings.TrimSpace(getenv("PULSE_TAGS"))
 	envLogLevel := strings.TrimSpace(getenv("LOG_LEVEL"))
@@ -577,6 +670,7 @@ func loadConfig(args []string, getenv func(string) string) (Config, error) {
 	intervalFlag := fs.Duration("interval", defaultInterval, "Reporting interval")
 	hostnameFlag := fs.String("hostname", envHostname, "Override hostname")
 	agentIDFlag := fs.String("agent-id", envAgentID, "Override agent identifier")
+	agentIDFileFlag := fs.String("agent-id-file", envAgentIDFile, "Path to a file storing the agent identifier (read on start, written on first start). Mount this file as a volume to keep the agent's identity stable across container recreation, which prevents the server's bound-token from rejecting the agent with 401 (#1447).")
 	insecureFlag := fs.Bool("insecure", utils.ParseBool(envInsecure), "Skip TLS verification")
 	logLevelFlag := fs.String("log-level", defaultLogLevel(envLogLevel), "Log level")
 
@@ -657,6 +751,7 @@ func loadConfig(args []string, getenv func(string) string) (Config, error) {
 		Interval:                  *intervalFlag,
 		HostnameOverride:          strings.TrimSpace(*hostnameFlag),
 		AgentID:                   strings.TrimSpace(*agentIDFlag),
+		AgentIDFile:               strings.TrimSpace(*agentIDFileFlag),
 		Tags:                      tags,
 		InsecureSkipVerify:        *insecureFlag,
 		LogLevel:                  logLevel,
