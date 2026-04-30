@@ -275,11 +275,16 @@ type cephNodeOSDClient interface {
 	GetNodeCephOSDs(ctx context.Context, node string) ([]proxmox.CephOSDStatus, error)
 }
 
+type cephNodeOSDMetadataClient interface {
+	GetNodeCephOSDMetadata(ctx context.Context, node string, osdID int) (*proxmox.CephOSDMetadata, error)
+}
+
 func enrichCephClusterOSDsFromNodes(ctx context.Context, client PVEClientInterface, nodes []proxmox.Node, cluster *models.CephCluster) {
 	osdClient, ok := client.(cephNodeOSDClient)
 	if !ok || cluster == nil || len(nodes) == 0 {
 		return
 	}
+	metadataClient, _ := client.(cephNodeOSDMetadataClient)
 
 	byID := make(map[int]models.CephOSD)
 	for _, osd := range cluster.OSDs {
@@ -321,6 +326,10 @@ func enrichCephClusterOSDsFromNodes(ctx context.Context, client PVEClientInterfa
 		}
 	}
 
+	if metadataClient != nil {
+		enrichCephClusterOSDsFromMetadata(ctx, metadataClient, nodes, byID)
+	}
+
 	if len(byID) == 0 {
 		return
 	}
@@ -332,6 +341,36 @@ func enrichCephClusterOSDsFromNodes(ctx context.Context, client PVEClientInterfa
 		return enriched[i].ID < enriched[j].ID
 	})
 	cluster.OSDs = enriched
+}
+
+func enrichCephClusterOSDsFromMetadata(ctx context.Context, client cephNodeOSDMetadataClient, nodes []proxmox.Node, osds map[int]models.CephOSD) {
+	for id, osd := range osds {
+		if strings.TrimSpace(osd.Host) != "" && !osd.Synthetic {
+			continue
+		}
+		for _, node := range nodes {
+			nodeName := strings.TrimSpace(node.Node)
+			if nodeName == "" {
+				continue
+			}
+			metadata, err := client.GetNodeCephOSDMetadata(ctx, nodeName, id)
+			if err != nil {
+				log.Debug().Err(err).Str("node", nodeName).Int("osd", id).Msg("Failed to fetch Ceph OSD metadata for node")
+				continue
+			}
+			host := strings.TrimSpace(metadata.OSD.Hostname)
+			if host == "" {
+				host = nodeName
+			}
+			osd.Host = host
+			osd.Synthetic = false
+			if osd.Name == "" {
+				osd.Name = fmt.Sprintf("osd.%d", id)
+			}
+			osds[id] = osd
+			break
+		}
+	}
 }
 
 func countInconsistentPGs(status *proxmox.CephStatus) int {

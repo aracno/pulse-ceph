@@ -131,6 +131,15 @@ type CephOSDStatus struct {
 	Weight float64  `json:"weight"`
 }
 
+// CephOSDMetadata captures per-OSD metadata returned by /nodes/{node}/ceph/osd/{osdid}/metadata.
+type CephOSDMetadata struct {
+	OSD struct {
+		ID       int    `json:"id"`
+		Hostname string `json:"hostname"`
+		Version  string `json:"version"`
+	} `json:"osd"`
+}
+
 func (o *CephOSDStatus) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		OSD    json.RawMessage `json:"osd"`
@@ -308,4 +317,21 @@ func (c *Client) GetNodeCephOSDs(ctx context.Context, node string) ([]CephOSDSta
 		return nil, err
 	}
 	return result.Data, nil
+}
+
+// GetNodeCephOSDMetadata fetches metadata for an OSD through a specific Proxmox node.
+func (c *Client) GetNodeCephOSDMetadata(ctx context.Context, node string, osdID int) (*CephOSDMetadata, error) {
+	resp, err := c.get(ctx, "/nodes/"+node+"/ceph/osd/"+strconv.Itoa(osdID)+"/metadata")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data CephOSDMetadata `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return &result.Data, nil
 }
