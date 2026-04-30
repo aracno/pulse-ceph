@@ -402,6 +402,7 @@ type AlertConfig struct {
 	DisableAllGuests             bool `json:"disableAllGuests"`             // Disable all alerts for VMs/containers
 	DisableAllHosts              bool `json:"disableAllHosts"`              // Disable all alerts for Pulse host agents
 	DisableAllStorage            bool `json:"disableAllStorage"`            // Disable all alerts for storage
+	DisableAllCeph               bool `json:"disableAllCeph"`               // Disable all alerts for Ceph clusters
 	DisableAllPBS                bool `json:"disableAllPBS"`                // Disable all alerts for PBS servers
 	DisableAllPMG                bool `json:"disableAllPMG"`                // Disable all alerts for PMG instances
 	DisableAllDockerHosts        bool `json:"disableAllDockerHosts"`        // Disable all alerts for Docker hosts
@@ -5492,6 +5493,256 @@ func (m *Manager) CheckStorage(storage models.Storage) {
 	// Check ZFS pool status if this is ZFS storage
 	if storage.ZFSPool != nil {
 		m.checkZFSPoolHealth(storage)
+	}
+}
+
+// CheckCephCluster evaluates Ceph health and OSD membership state.
+func (m *Manager) CheckCephCluster(cluster models.CephCluster) {
+	resourceID := strings.TrimSpace(cluster.ID)
+	if resourceID == "" {
+		resourceID = strings.TrimSpace(cluster.Instance)
+	}
+	if resourceID == "" {
+		return
+	}
+
+	resourceName := strings.TrimSpace(cluster.Name)
+	if resourceName == "" {
+		resourceName = "Ceph"
+	}
+	if cluster.Instance != "" && !strings.Contains(strings.ToLower(resourceName), "ceph") {
+		resourceName = fmt.Sprintf("%s Ceph", cluster.Instance)
+	}
+
+	m.mu.RLock()
+	enabled := m.config.Enabled
+	disableAll := m.config.DisableAllCeph
+	override, hasOverride := m.config.Overrides[resourceID]
+	m.mu.RUnlock()
+
+	if !enabled {
+		return
+	}
+	if disableAll || (hasOverride && override.Disabled) {
+		m.clearCephClusterAlerts(resourceID)
+		return
+	}
+
+	m.checkCephHealth(cluster, resourceID, resourceName)
+	m.checkCephOSDState(cluster, resourceID, resourceName)
+}
+
+func (m *Manager) checkCephHealth(cluster models.CephCluster, resourceID, resourceName string) {
+	alertID := fmt.Sprintf("%s-ceph-health", resourceID)
+	health := strings.ToUpper(strings.TrimSpace(cluster.Health))
+	if health == "" || health == "HEALTH_OK" || health == "OK" {
+		m.clearAlert(alertID)
+		return
+	}
+
+	level := AlertLevelWarning
+	if health == "HEALTH_ERR" || health == "ERR" || strings.Contains(health, "ERROR") {
+		level = AlertLevelCritical
+	}
+
+	message := fmt.Sprintf("%s health is %s", resourceName, health)
+	if detail := strings.TrimSpace(cluster.HealthMessage); detail != "" {
+		message = fmt.Sprintf("%s: %s", message, detail)
+	}
+
+	m.upsertStateAlert(&Alert{
+		ID:           alertID,
+		Type:         "ceph-health",
+		Level:        level,
+		ResourceID:   resourceID,
+		ResourceName: resourceName,
+		Node:         "",
+		Instance:     cluster.Instance,
+		Message:      message,
+		Value:        cephHealthValue(health),
+		Threshold:    0,
+		StartTime:    time.Now(),
+		LastSeen:     time.Now(),
+		Metadata: map[string]interface{}{
+			"resourceType":    "ceph",
+			"health":          health,
+			"healthMessage":   cluster.HealthMessage,
+			"fsid":            cluster.FSID,
+			"numOsds":         cluster.NumOSDs,
+			"numOsdsUp":       cluster.NumOSDsUp,
+			"numOsdsIn":       cluster.NumOSDsIn,
+			"usagePercent":    cluster.UsagePercent,
+			"clearCondition":  "HEALTH_OK",
+			"lastUpdatedUnix": cluster.LastUpdated.Unix(),
+		},
+	})
+}
+
+func (m *Manager) checkCephOSDState(cluster models.CephCluster, resourceID, resourceName string) {
+	alertID := fmt.Sprintf("%s-ceph-osd-state", resourceID)
+	if cluster.NumOSDs <= 0 {
+		m.clearAlert(alertID)
+		return
+	}
+
+	down := cluster.NumOSDs - cluster.NumOSDsUp
+	out := cluster.NumOSDs - cluster.NumOSDsIn
+	if down < 0 {
+		down = 0
+	}
+	if out < 0 {
+		out = 0
+	}
+	if down == 0 && out == 0 {
+		m.clearAlert(alertID)
+		return
+	}
+
+	level := AlertLevelWarning
+	if down > 0 {
+		level = AlertLevelCritical
+	}
+
+	parts := make([]string, 0, 2)
+	if down > 0 {
+		parts = append(parts, fmt.Sprintf("%d down", down))
+	}
+	if out > 0 {
+		parts = append(parts, fmt.Sprintf("%d out", out))
+	}
+
+	message := fmt.Sprintf("%s OSD state degraded: %s (%d/%d up, %d/%d in)",
+		resourceName,
+		strings.Join(parts, ", "),
+		cluster.NumOSDsUp,
+		cluster.NumOSDs,
+		cluster.NumOSDsIn,
+		cluster.NumOSDs,
+	)
+
+	m.upsertStateAlert(&Alert{
+		ID:           alertID,
+		Type:         "ceph-osd-state",
+		Level:        level,
+		ResourceID:   resourceID,
+		ResourceName: resourceName,
+		Node:         "",
+		Instance:     cluster.Instance,
+		Message:      message,
+		Value:        float64(down + out),
+		Threshold:    0,
+		StartTime:    time.Now(),
+		LastSeen:     time.Now(),
+		Metadata: map[string]interface{}{
+			"resourceType":    "ceph",
+			"fsid":            cluster.FSID,
+			"numOsds":         cluster.NumOSDs,
+			"numOsdsUp":       cluster.NumOSDsUp,
+			"numOsdsIn":       cluster.NumOSDsIn,
+			"osdsDown":        down,
+			"osdsOut":         out,
+			"clearCondition":  "all OSDs up and in",
+			"lastUpdatedUnix": cluster.LastUpdated.Unix(),
+		},
+	})
+}
+
+func cephHealthValue(health string) float64 {
+	switch strings.ToUpper(strings.TrimSpace(health)) {
+	case "HEALTH_ERR", "ERR":
+		return 2
+	case "HEALTH_WARN", "WARN", "WARNING":
+		return 1
+	default:
+		return 1
+	}
+}
+
+func (m *Manager) upsertStateAlert(alert *Alert) {
+	if alert == nil || alert.ID == "" {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	existing, exists := m.activeAlerts[alert.ID]
+	escalatedToCritical := exists && existing != nil && existing.Level != AlertLevelCritical && alert.Level == AlertLevelCritical
+
+	m.preserveAlertState(alert.ID, alert)
+	m.activeAlerts[alert.ID] = alert
+	m.recentAlerts[alert.ID] = alert
+
+	if exists {
+		if escalatedToCritical {
+			m.historyManager.AddAlert(*alert)
+			if m.checkRateLimit(alert.ID) {
+				m.dispatchAlert(alert, true)
+			}
+		}
+		return
+	}
+
+	m.historyManager.AddAlert(*alert)
+
+	if m.onAlertForAI != nil {
+		alertCopy := alert.Clone()
+		go func(a *Alert) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error().Interface("panic", r).Str("alertID", a.ID).Msg("Panic in AI alert callback")
+				}
+			}()
+			m.onAlertForAI(a)
+		}(alertCopy)
+	}
+
+	if m.checkRateLimit(alert.ID) {
+		m.dispatchAlert(alert, true)
+	}
+}
+
+func (m *Manager) clearCephClusterAlerts(resourceID string) {
+	m.clearAlert(fmt.Sprintf("%s-ceph-health", resourceID))
+	m.clearAlert(fmt.Sprintf("%s-ceph-osd-state", resourceID))
+}
+
+// SyncCephAlertsForInstance clears Ceph alerts for clusters that disappeared from an instance.
+func (m *Manager) SyncCephAlertsForInstance(instanceName string, clusters []models.CephCluster) {
+	instanceName = strings.TrimSpace(instanceName)
+	if instanceName == "" {
+		return
+	}
+
+	valid := make(map[string]struct{}, len(clusters)*2)
+	for _, cluster := range clusters {
+		if strings.TrimSpace(cluster.Instance) != instanceName {
+			continue
+		}
+		resourceID := strings.TrimSpace(cluster.ID)
+		if resourceID == "" {
+			resourceID = strings.TrimSpace(cluster.Instance)
+		}
+		if resourceID == "" {
+			continue
+		}
+		valid[fmt.Sprintf("%s-ceph-health", resourceID)] = struct{}{}
+		valid[fmt.Sprintf("%s-ceph-osd-state", resourceID)] = struct{}{}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for alertID, alert := range m.activeAlerts {
+		if alert == nil || strings.TrimSpace(alert.Instance) != instanceName {
+			continue
+		}
+		if alert.Type != "ceph-health" && alert.Type != "ceph-osd-state" {
+			continue
+		}
+		if _, ok := valid[alertID]; ok {
+			continue
+		}
+		m.clearAlertNoLock(alertID)
 	}
 }
 

@@ -23,6 +23,7 @@ export type ResourceType =
     | 'pmg'
     | 'hostAgent'
     | 'hostDisk'
+    | 'ceph'
     | 'dockerHost'
     | 'dockerContainer';
 
@@ -131,6 +132,7 @@ export type ProxmoxSectionId =
     | 'pbs'
     | 'guests'
     | 'storage'
+    | 'ceph'
     | 'backups'
     | 'snapshots';
 
@@ -232,6 +234,7 @@ export interface GlobalDisableFlags {
     disableAllGuests: boolean;
     disableAllHosts: boolean;
     disableAllStorage: boolean;
+    disableAllCeph: boolean;
     disableAllPBS: boolean;
     disableAllPMG: boolean;
     disableAllDockerHosts: boolean;
@@ -336,6 +339,7 @@ export const RESOURCE_COLUMNS: Record<ResourceType, ThresholdColumn[]> = {
     storage: [
         { key: 'usage', label: 'Usage %', unit: '%' },
     ],
+    ceph: [],
     pbs: [
         { key: 'cpu', label: 'CPU %', unit: '%' },
         { key: 'memory', label: 'Memory %', unit: '%' },
