@@ -79,7 +79,6 @@ import { ProxmoxIcon } from '@/components/icons/ProxmoxIcon';
 import { PulseLogoIcon } from '@/components/icons/PulseLogoIcon';
 import BadgeCheck from 'lucide-solid/icons/badge-check';
 import Terminal from 'lucide-solid/icons/terminal';
-import Container from 'lucide-solid/icons/container';
 import type { NodeConfig } from '@/types/nodes';
 import type { UpdateInfo, VersionInfo } from '@/api/updates';
 import type { SecurityStatus as SecurityStatusInfo } from '@/types/config';
@@ -247,7 +246,7 @@ interface DiscoveryScanStatus {
 
 type SettingsTab =
   | 'proxmox'
-  | 'docker'
+  | 'devices'
   | 'hosts'
   | 'agents'
   | 'system-general'
@@ -278,10 +277,10 @@ const SETTINGS_HEADER_META: Record<SettingsTab, { title: string; description: st
     description:
       'Monitor your Proxmox Virtual Environment, Backup Server, and Mail Gateway infrastructure.',
   },
-  docker: {
-    title: 'Docker',
+  devices: {
+    title: 'Devices',
     description:
-      'Monitor Docker hosts, containers, images, and volumes across your infrastructure.',
+      'Configure network hardware monitoring through UniFi Site Manager API and SNMP.',
   },
   hosts: {
     title: 'Hosts',
@@ -409,7 +408,8 @@ const Settings: Component<SettingsProps> = (props) => {
   const deriveTabFromPath = (path: string): SettingsTab => {
     if (path.includes('/settings/proxmox')) return 'proxmox';
     if (path.includes('/settings/agent-hub')) return 'proxmox';
-    if (path.includes('/settings/docker')) return 'docker';
+    if (path.includes('/settings/devices')) return 'devices';
+    if (path.includes('/settings/docker')) return 'devices';
     if (path.includes('/settings/containers')) return 'agents';
     if (
       path.includes('/settings/hosts') ||
@@ -449,7 +449,6 @@ const Settings: Component<SettingsProps> = (props) => {
       path.includes('/settings/pve') ||
       path.includes('/settings/pbs') ||
       path.includes('/settings/pmg') ||
-      path.includes('/settings/docker') ||
       path.includes('/settings/linuxServers') ||
       path.includes('/settings/windowsServers') ||
       path.includes('/settings/macServers')
@@ -540,7 +539,15 @@ const Settings: Component<SettingsProps> = (props) => {
         }
 
         if (path.startsWith('/settings/containers')) {
-          navigate(path.replace('/settings/containers', '/settings/docker'), {
+          navigate(path.replace('/settings/containers', '/settings/agents'), {
+            replace: true,
+            scroll: false,
+          });
+          return;
+        }
+
+        if (path.startsWith('/settings/docker')) {
+          navigate(path.replace('/settings/docker', '/settings/devices'), {
             replace: true,
             scroll: false,
           });
@@ -624,8 +631,17 @@ const Settings: Component<SettingsProps> = (props) => {
   const [savingHideLocalLogin, setSavingHideLocalLogin] = createSignal(false);
 
   // Docker update actions control (server-wide setting to hide update buttons)
-  const [disableDockerUpdateActions, setDisableDockerUpdateActions] = createSignal(false);
-  const [savingDockerUpdateActions, setSavingDockerUpdateActions] = createSignal(false);
+  const [, setDisableDockerUpdateActions] = createSignal(false);
+
+  // Devices monitoring configuration draft. The collector is intentionally separated by source:
+  // UniFi for rich vendor data, SNMP for generic managed network hardware.
+  const [devicesUnifiEnabled, setDevicesUnifiEnabled] = createSignal(false);
+  const [devicesUnifiApiKey, setDevicesUnifiApiKey] = createSignal('');
+  const [devicesUnifiSiteFilter, setDevicesUnifiSiteFilter] = createSignal('');
+  const [devicesSnmpEnabled, setDevicesSnmpEnabled] = createSignal(false);
+  const [devicesSnmpTargets, setDevicesSnmpTargets] = createSignal('');
+  const [devicesSnmpCommunity, setDevicesSnmpCommunity] = createSignal('');
+  const [devicesPollingSeconds, setDevicesPollingSeconds] = createSignal(60);
 
   const temperatureMonitoringLocked = () =>
     Boolean(
@@ -633,9 +649,6 @@ const Settings: Component<SettingsProps> = (props) => {
     );
   const hideLocalLoginLocked = () =>
     Boolean(envOverrides().hideLocalLogin || envOverrides()['PULSE_AUTH_HIDE_LOCAL_LOGIN']);
-  const disableDockerUpdateActionsLocked = () =>
-    Boolean(envOverrides().disableDockerUpdateActions || envOverrides()['PULSE_DISABLE_DOCKER_UPDATE_ACTIONS']);
-
   const pvePollingEnvLocked = () =>
     Boolean(envOverrides().pvePollingInterval || envOverrides().PVE_POLLING_INTERVAL);
   let discoverySubnetInputRef: HTMLInputElement | undefined;
@@ -725,37 +738,6 @@ const Settings: Component<SettingsProps> = (props) => {
       setHideLocalLogin(previous);
     } finally {
       setSavingHideLocalLogin(false);
-    }
-  };
-
-  const handleDisableDockerUpdateActionsChange = async (disabled: boolean): Promise<void> => {
-    if (disableDockerUpdateActionsLocked() || savingDockerUpdateActions()) {
-      return;
-    }
-
-    const previous = disableDockerUpdateActions();
-    setDisableDockerUpdateActions(disabled);
-    setSavingDockerUpdateActions(true);
-
-    try {
-      await SettingsAPI.updateSystemSettings({ disableDockerUpdateActions: disabled });
-      // Also update the global store so UpdateButton reacts immediately
-      const { updateDockerUpdateActionsSetting } = await import('@/stores/systemSettings');
-      updateDockerUpdateActionsSetting(disabled);
-
-      if (disabled) {
-        notificationStore.success('Docker update buttons hidden', 2000);
-      } else {
-        notificationStore.info('Docker update buttons visible', 2000);
-      }
-    } catch (error) {
-      logger.error('Failed to update Docker update actions setting', error);
-      notificationStore.error(
-        error instanceof Error ? error.message : 'Failed to update Docker update actions setting',
-      );
-      setDisableDockerUpdateActions(previous);
-    } finally {
-      setSavingDockerUpdateActions(false);
     }
   };
 
@@ -937,7 +919,7 @@ const Settings: Component<SettingsProps> = (props) => {
         items: [
           { id: 'proxmox', label: 'Proxmox', icon: ProxmoxIcon },
           { id: 'agents', label: 'Agents', icon: Bot, iconProps: { strokeWidth: 2 } },
-          { id: 'docker', label: 'Docker', icon: Container, iconProps: { strokeWidth: 2 } },
+          { id: 'devices', label: 'Devices', icon: Network, iconProps: { strokeWidth: 2 } },
         ],
       },
       {
@@ -3356,61 +3338,120 @@ const Settings: Component<SettingsProps> = (props) => {
                 <AgentProfilesPanel />
               </Show>
 
-              {/* Docker Tab */}
-              <Show when={activeTab() === 'docker'}>
-                {/* Docker Settings Card */}
+              {/* Devices Tab */}
+              <Show when={activeTab() === 'devices'}>
                 <Card padding="lg" class="mb-6">
-                  <div class="space-y-4">
+                  <div class="space-y-6">
                     <div class="space-y-1">
-                      <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Docker Settings</h3>
+                      <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Devices Monitoring</h3>
                       <p class="text-sm text-gray-600 dark:text-gray-400">
-                        Server-wide settings for Docker container management.
+                        Collect basic health indicators from manageable network hardware.
                       </p>
                     </div>
 
-                    {/* Hide Docker Update Buttons Toggle */}
-                    <div class="flex items-start justify-between gap-4 p-4 rounded-lg border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/50">
-                      <div class="flex-1 space-y-1">
-                        <div class="flex items-center gap-2">
-                          <span class="text-sm font-medium text-gray-900 dark:text-gray-100">
-                            Hide Docker Update Buttons
-                          </span>
-                          <Show when={disableDockerUpdateActionsLocked()}>
-                            <span class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="Locked by environment variable PULSE_DISABLE_DOCKER_UPDATE_ACTIONS">
-                              <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                              </svg>
-                              ENV
-                            </span>
-                          </Show>
-                        </div>
-                        <p class="text-xs text-gray-500 dark:text-gray-400">
-                          When enabled, the "Update" button on Docker containers will be hidden across all views.
-                          Update detection will still work, allowing you to see which containers have updates available.
-                          Use this in production environments where you prefer Pulse to be read-only.
-                        </p>
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                          Can also be set via environment variable: <code class="px-1 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">PULSE_DISABLE_DOCKER_UPDATE_ACTIONS=true</code>
-                        </p>
-                      </div>
-                      <div class="flex-shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleDisableDockerUpdateActionsChange(!disableDockerUpdateActions())}
-                          disabled={disableDockerUpdateActionsLocked() || savingDockerUpdateActions()}
-                          class={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 ${disableDockerUpdateActions()
-                            ? 'bg-blue-600'
-                            : 'bg-gray-300 dark:bg-gray-600'
-                            } ${disableDockerUpdateActionsLocked() ? 'opacity-50 cursor-not-allowed' : ''}`}
-                          role="switch"
-                          aria-checked={disableDockerUpdateActions()}
-                          title={disableDockerUpdateActionsLocked() ? 'Locked by environment variable' : undefined}
-                        >
-                          <span
-                            class={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${disableDockerUpdateActions() ? 'translate-x-6' : 'translate-x-1'
-                              }`}
+                    <div class="grid gap-4 xl:grid-cols-3">
+                      <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
+                        <div class="flex items-start justify-between gap-4">
+                          <div>
+                            <h4 class="text-sm font-semibold text-gray-900 dark:text-gray-100">UniFi Site Manager API</h4>
+                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                              Preferred source for UniFi consoles, sites, gateways, switches, and access points.
+                            </p>
+                          </div>
+                          <Toggle
+                            checked={devicesUnifiEnabled()}
+                            onChange={(event) => setDevicesUnifiEnabled(event.currentTarget.checked)}
+                            ariaLabel="Enable UniFi device monitoring"
+                            size="sm"
                           />
-                        </button>
+                        </div>
+                        <div class="mt-4 space-y-3">
+                          <label class={formField}>
+                            <span class={labelClass()}>API key</span>
+                            <input
+                              type="password"
+                              class={controlClass()}
+                              value={devicesUnifiApiKey()}
+                              onInput={(event) => setDevicesUnifiApiKey(event.currentTarget.value)}
+                              placeholder="X-API-Key"
+                              autocomplete="off"
+                            />
+                          </label>
+                          <label class={formField}>
+                            <span class={labelClass()}>Site filter</span>
+                            <input
+                              class={controlClass()}
+                              value={devicesUnifiSiteFilter()}
+                              onInput={(event) => setDevicesUnifiSiteFilter(event.currentTarget.value)}
+                              placeholder="All sites"
+                            />
+                            <span class={formHelpText}>Optional comma-separated UniFi site names or IDs.</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
+                        <div class="flex items-start justify-between gap-4">
+                          <div>
+                            <h4 class="text-sm font-semibold text-gray-900 dark:text-gray-100">SNMP</h4>
+                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                              Generic health fallback for managed network equipment outside UniFi.
+                            </p>
+                          </div>
+                          <Toggle
+                            checked={devicesSnmpEnabled()}
+                            onChange={(event) => setDevicesSnmpEnabled(event.currentTarget.checked)}
+                            ariaLabel="Enable SNMP device monitoring"
+                            size="sm"
+                          />
+                        </div>
+                        <div class="mt-4 space-y-3">
+                          <label class={formField}>
+                            <span class={labelClass()}>Targets</span>
+                            <textarea
+                              class={controlClass('min-h-20')}
+                              value={devicesSnmpTargets()}
+                              onInput={(event) => setDevicesSnmpTargets(event.currentTarget.value)}
+                              placeholder="192.168.1.1&#10;192.168.1.0/24"
+                            />
+                            <span class={formHelpText}>One host or CIDR per line.</span>
+                          </label>
+                          <label class={formField}>
+                            <span class={labelClass()}>Community</span>
+                            <input
+                              type="password"
+                              class={controlClass()}
+                              value={devicesSnmpCommunity()}
+                              onInput={(event) => setDevicesSnmpCommunity(event.currentTarget.value)}
+                              placeholder="public"
+                              autocomplete="off"
+                            />
+                          </label>
+                        </div>
+                      </div>
+
+                      <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
+                        <h4 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Polling and Health</h4>
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          Basic checks focus on reachability, CPU, memory, uptime, firmware, and device state.
+                        </p>
+                        <label class={`${formField} mt-4`}>
+                          <span class={labelClass()}>Polling interval</span>
+                          <select
+                            class={controlClass()}
+                            value={devicesPollingSeconds()}
+                            onChange={(event) => setDevicesPollingSeconds(Number(event.currentTarget.value))}
+                          >
+                            <option value={30}>30 seconds</option>
+                            <option value={60}>60 seconds</option>
+                            <option value={120}>2 minutes</option>
+                            <option value={300}>5 minutes</option>
+                          </select>
+                        </label>
+                        <div class="mt-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-200">
+                          Configuration storage and collectors are staged behind this UI so credentials can be wired
+                          through the backend secret store before polling is enabled.
+                        </div>
                       </div>
                     </div>
                   </div>

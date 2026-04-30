@@ -42,7 +42,6 @@ import { ProxmoxIcon } from '@/components/icons/ProxmoxIcon';
 import { startMetricsSampler } from './stores/metricsSampler';
 import { seedFromBackend } from './stores/metricsHistory';
 import { getMetricsViewMode } from './stores/metricsViewMode';
-import BoxesIcon from 'lucide-solid/icons/boxes';
 import MonitorIcon from 'lucide-solid/icons/monitor';
 import BellIcon from 'lucide-solid/icons/bell';
 import SettingsIcon from 'lucide-solid/icons/settings';
@@ -73,8 +72,8 @@ const AlertsPage = lazy(() =>
   import('./pages/Alerts').then((module) => ({ default: module.Alerts })),
 );
 const SettingsPage = lazy(() => import('./components/Settings/Settings'));
-const DockerHosts = lazy(() =>
-  import('./components/Docker/DockerHosts').then((module) => ({ default: module.DockerHosts })),
+const DevicesPage = lazy(() =>
+  import('./components/Devices/Devices').then((module) => ({ default: module.Devices })),
 );
 const KubernetesClusters = lazy(() =>
   import('./components/Kubernetes/KubernetesClusters').then((module) => ({
@@ -113,18 +112,6 @@ export const useDarkMode = () => {
   }
   return context;
 };
-
-// Docker route component - uses unified resources via useResourcesAsLegacy hook
-function DockerRoute() {
-  const wsContext = useContext(WebSocketContext);
-  if (!wsContext) {
-    return <div>Loading...</div>;
-  }
-  const { activeAlerts } = wsContext;
-  const { asDockerHosts } = useResourcesAsLegacy();
-
-  return <DockerHosts hosts={asDockerHosts() as any} activeAlerts={activeAlerts} />;
-}
 
 // Hosts route component - HostsOverview uses useResourcesAsLegacy directly for proper reactivity
 function HostsRoute() {
@@ -276,10 +263,10 @@ function App() {
       () => import('./components/Replication/Replication'),
       () => import('./components/PMG/MailGateway'),
       () => import('./components/Hosts/HostsOverview'),
+      () => import('./components/Devices/Devices'),
 
       () => import('./pages/Alerts'),
       () => import('./components/Settings/Settings'),
-      () => import('./components/Docker/DockerHosts'),
     ];
 
     loaders.forEach((load) => {
@@ -297,6 +284,7 @@ function App() {
     removedDockerHosts: [],
     removedHosts: [],
     hosts: [],
+    devices: [],
     storage: [],
     cephClusters: [],
     physicalDisks: [],
@@ -979,7 +967,8 @@ function App() {
       <Route path="/proxmox/backups" component={Backups} />
       <Route path="/storage" component={() => <Navigate href="/proxmox/storage" />} />
       <Route path="/backups" component={() => <Navigate href="/proxmox/backups" />} />
-      <Route path="/docker" component={DockerRoute} />
+      <Route path="/docker" component={() => <Navigate href="/devices" />} />
+      <Route path="/devices" component={DevicesPage} />
       <Route path="/kubernetes" component={KubernetesRoute} />
       <Route path="/hosts" component={HostsRoute} />
 
@@ -1134,7 +1123,7 @@ function AppLayout(props: {
   const getActiveTab = () => {
     const path = location.pathname;
     if (path.startsWith('/proxmox')) return 'proxmox';
-    if (path.startsWith('/docker')) return 'docker';
+    if (path.startsWith('/devices')) return 'devices';
     if (path.startsWith('/kubernetes')) return 'kubernetes';
     if (path.startsWith('/hosts')) return 'hosts';
     if (path.startsWith('/servers')) return 'hosts'; // Legacy redirect
@@ -1143,7 +1132,7 @@ function AppLayout(props: {
     if (path.startsWith('/settings')) return 'settings';
     return 'proxmox';
   };
-  const hasDockerHosts = createMemo(() => (props.state().dockerHosts?.length ?? 0) > 0);
+  const hasDevices = createMemo(() => (props.state().devices?.length ?? 0) > 0);
   const hasKubernetesClusters = createMemo(() => (props.state().kubernetesClusters?.length ?? 0) > 0);
   const hasHosts = createMemo(() => (props.state().hosts?.length ?? 0) > 0);
   const hasProxmoxHosts = createMemo(
@@ -1152,12 +1141,6 @@ function AppLayout(props: {
       (props.state().vms?.length ?? 0) > 0 ||
       (props.state().containers?.length ?? 0) > 0,
   );
-
-  createEffect(() => {
-    if (hasDockerHosts()) {
-      markPlatformSeen('docker');
-    }
-  });
 
   createEffect(() => {
     if (hasKubernetesClusters()) {
@@ -1193,17 +1176,17 @@ function AppLayout(props: {
         alwaysShow: true, // Proxmox is the default, always show
       },
       {
-        id: 'docker' as const,
-        label: 'Docker',
-        route: '/docker',
-        settingsRoute: '/settings/docker',
-        tooltip: 'Monitor Docker hosts and containers',
-        enabled: hasDockerHosts() || !!seenPlatforms()['docker'],
-        live: hasDockerHosts(),
+        id: 'devices' as const,
+        label: 'Devices',
+        route: '/devices',
+        settingsRoute: '/settings/devices',
+        tooltip: 'Monitor network devices, UniFi gear, routers, switches, and modems',
+        enabled: hasDevices() || !!seenPlatforms()['devices'],
+        live: hasDevices(),
         icon: (
-          <BoxesIcon class="w-4 h-4 shrink-0" />
+          <NetworkIcon class="w-4 h-4 shrink-0" />
         ),
-        alwaysShow: true, // Docker is commonly used, keep visible
+        alwaysShow: true,
       },
       {
         id: 'kubernetes' as const,

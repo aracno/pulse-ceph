@@ -12,6 +12,7 @@ export interface State {
   removedKubernetesClusters?: RemovedKubernetesCluster[];
   removedHosts?: RemovedHost[];
   hosts: Host[];
+  devices?: ManagedDevice[];
   replicationJobs: ReplicationJob[];
   storage: Storage[];
   cephClusters: CephCluster[];
@@ -33,6 +34,27 @@ export interface State {
   pveTagColors?: Record<string, string>;
   // Unified resources (new data model - eventually replaces legacy arrays above)
   resources?: Resource[];
+}
+
+export interface ManagedDevice {
+  id: string;
+  name?: string;
+  hostname?: string;
+  type?: 'switch' | 'router' | 'gateway' | 'modem' | 'access_point' | 'ap' | 'controller' | 'console' | string;
+  model?: string;
+  vendor?: string;
+  ip?: string;
+  mac?: string;
+  site?: string;
+  source?: 'unifi' | 'snmp' | 'manual' | string;
+  status?: 'online' | 'warning' | 'offline' | 'unknown' | string;
+  managed?: boolean;
+  cpuUsage?: number;
+  memoryUsage?: number;
+  temperatureC?: number;
+  uptime?: string;
+  firmwareVersion?: string;
+  lastSeen?: string;
 }
 
 export interface RemovedDockerHost {
