@@ -769,6 +769,19 @@ func (a *Agent) collectCephStatus(ctx context.Context) *agentshost.CephCluster {
 		})
 	}
 
+	// Convert OSDs
+	for _, osd := range status.OSDMap.OSDs {
+		result.OSDMap.OSDs = append(result.OSDMap.OSDs, agentshost.CephOSD{
+			ID:     osd.ID,
+			Name:   osd.Name,
+			Host:   osd.Host,
+			Up:     osd.Up,
+			In:     osd.In,
+			State:  append([]string(nil), osd.State...),
+			Weight: osd.Weight,
+		})
+	}
+
 	// Convert health checks
 	for name, check := range status.Health.Checks {
 		result.Health.Checks[name] = agentshost.CephCheck{

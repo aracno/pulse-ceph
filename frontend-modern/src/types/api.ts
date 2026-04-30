@@ -642,6 +642,7 @@ export interface CephOSD {
   in: boolean;
   state?: string[];
   weight?: number;
+  synthetic?: boolean;
 }
 
 export interface CephPool {

@@ -12344,6 +12344,22 @@ func convertAgentCephToGlobalCluster(ceph *agentshost.CephCluster, hostname, hos
 		cluster.HealthMessage = strings.Join(healthMessages, "; ")
 	}
 
+	for _, osd := range ceph.OSDMap.OSDs {
+		name := strings.TrimSpace(osd.Name)
+		if name == "" {
+			name = fmt.Sprintf("osd.%d", osd.ID)
+		}
+		cluster.OSDs = append(cluster.OSDs, models.CephOSD{
+			ID:     osd.ID,
+			Name:   name,
+			Host:   osd.Host,
+			Up:     osd.Up,
+			In:     osd.In,
+			State:  append([]string(nil), osd.State...),
+			Weight: osd.Weight,
+		})
+	}
+
 	// Convert pools
 	for _, pool := range ceph.Pools {
 		cluster.Pools = append(cluster.Pools, models.CephPool{

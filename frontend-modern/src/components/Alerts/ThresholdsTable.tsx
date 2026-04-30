@@ -1850,6 +1850,7 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
         const subtitle = [
           cluster.instance || cluster.name || 'Ceph',
           osd.host,
+          osd.synthetic ? 'OSD list inferred from agent summary' : undefined,
           osdAlertsDisabled ? 'OSD alerts disabled for cluster' : undefined,
         ].filter(Boolean).join(' - ');
 
