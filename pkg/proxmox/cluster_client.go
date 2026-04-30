@@ -1138,6 +1138,20 @@ func (cc *ClusterClient) GetCephDF(ctx context.Context) (*CephDF, error) {
 	return result, err
 }
 
+// GetNodeCephOSDs returns OSDs visible from a specific node with failover support.
+func (cc *ClusterClient) GetNodeCephOSDs(ctx context.Context, node string) ([]CephOSDStatus, error) {
+	var result []CephOSDStatus
+	err := cc.executeWithFailover(ctx, func(client *Client) error {
+		osds, err := client.GetNodeCephOSDs(ctx, node)
+		if err != nil {
+			return err
+		}
+		result = osds
+		return nil
+	})
+	return result, err
+}
+
 func (cc *ClusterClient) GetVMSnapshots(ctx context.Context, node string, vmid int) ([]Snapshot, error) {
 	var result []Snapshot
 	err := cc.executeWithFailover(ctx, func(client *Client) error {

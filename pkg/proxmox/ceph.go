@@ -3,6 +3,8 @@ package proxmox
 import (
 	"context"
 	"encoding/json"
+	"strconv"
+	"strings"
 )
 
 // CephStatus represents the Ceph cluster status information returned by /cluster/ceph/status
@@ -129,6 +131,73 @@ type CephOSDStatus struct {
 	Weight float64  `json:"weight"`
 }
 
+func (o *CephOSDStatus) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		OSD    json.RawMessage `json:"osd"`
+		ID     json.RawMessage `json:"id"`
+		Name   string          `json:"name"`
+		Host   string          `json:"host"`
+		Node   string          `json:"node"`
+		Up     json.RawMessage `json:"up"`
+		In     json.RawMessage `json:"in"`
+		State  []string        `json:"state"`
+		Status string          `json:"status"`
+		Weight float64         `json:"weight"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	id, err := decodeFlexibleInt(raw.OSD)
+	if err != nil || id == 0 {
+		if fallback, fallbackErr := decodeFlexibleInt(raw.ID); fallbackErr == nil {
+			id = fallback
+		}
+	}
+	up, _ := decodeFlexibleInt(raw.Up)
+	in, _ := decodeFlexibleInt(raw.In)
+	if up == 0 && strings.EqualFold(raw.Status, "up") {
+		up = 1
+	}
+
+	o.ID = id
+	o.Name = strings.TrimSpace(raw.Name)
+	if o.Name == "" {
+		o.Name = "osd." + strconv.Itoa(id)
+	}
+	o.Host = strings.TrimSpace(raw.Host)
+	if o.Host == "" {
+		o.Host = strings.TrimSpace(raw.Node)
+	}
+	o.Up = up
+	o.In = in
+	o.State = append([]string(nil), raw.State...)
+	o.Weight = raw.Weight
+	return nil
+}
+
+func decodeFlexibleInt(raw json.RawMessage) (int, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, nil
+	}
+	var i int
+	if err := json.Unmarshal(raw, &i); err == nil {
+		return i, nil
+	}
+	var b bool
+	if err := json.Unmarshal(raw, &b); err == nil {
+		if b {
+			return 1, nil
+		}
+		return 0, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return strconv.Atoi(strings.TrimSpace(s))
+	}
+	return 0, nil
+}
+
 // CephPGMap captures placement group statistics.
 type CephPGMap struct {
 	NumPGs        int           `json:"num_pgs"`
@@ -222,4 +291,21 @@ func (c *Client) GetCephDF(ctx context.Context) (*CephDF, error) {
 	}
 
 	return &result.Data, nil
+}
+
+// GetNodeCephOSDs fetches OSDs visible from a specific Proxmox node.
+func (c *Client) GetNodeCephOSDs(ctx context.Context, node string) ([]CephOSDStatus, error) {
+	resp, err := c.get(ctx, "/nodes/"+node+"/ceph/osd")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []CephOSDStatus `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result.Data, nil
 }
