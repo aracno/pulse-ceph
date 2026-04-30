@@ -1885,6 +1885,12 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
     return resources;
   }, []);
 
+  const cephResourceForCluster = (clusterId: string) =>
+    cephClustersWithOverrides().filter((cluster) => cluster.id === clusterId);
+
+  const cephOSDsForCluster = (clusterId: string) =>
+    cephOSDsWithOverrides().filter((osd) => osd.id.startsWith(`${clusterId}:osd:`));
+
   const summaryItems = createMemo(() => {
     try {
       const items = [
@@ -3588,25 +3594,33 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
               }
             >
               <div ref={registerSection('ceph')} class="scroll-mt-24">
-                <div class="mb-4 space-y-3">
+                <div class="space-y-4">
                   <For each={props.cephClusters ?? []}>
                     {(cluster) => {
                       const override = () =>
                         props.overrides().find((item) => item.id === cluster.id);
                       const clusterDisabled = () =>
                         props.disableAllCeph() || Boolean(override()?.disabled);
+                      const clusterResource = () => cephResourceForCluster(cluster.id);
+                      const osdResources = () => cephOSDsForCluster(cluster.id);
+                      const osdOverrideCount = () =>
+                        osdResources().filter((osd) => osd.disabled || osd.hasOverride).length;
                       const toggleRow = (
                         label: string,
+                        description: string,
                         key: CephAlertToggleKey,
                         titleEnabled: string,
                         titleDisabled: string,
                       ) => {
                         const disabled = () => Boolean(override()?.[key]);
                         return (
-                          <div class="flex items-center justify-between gap-3 rounded-md border border-gray-200 px-3 py-2 dark:border-gray-700">
+                          <div class="flex min-h-[3.25rem] items-center justify-between gap-3 rounded-md border border-gray-200 bg-white px-3 py-2 dark:border-gray-700 dark:bg-gray-950/30">
                             <div class="min-w-0">
                               <div class="text-sm font-medium text-gray-900 dark:text-gray-100">
                                 {label}
+                              </div>
+                              <div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                                {description}
                               </div>
                             </div>
                             <Toggle
@@ -3622,65 +3636,168 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
                       };
 
                       return (
-                        <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/40">
-                          <div class="mb-3 flex items-center justify-between gap-3">
-                            <div class="min-w-0">
-                              <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                                {cluster.instance ? `${cluster.instance} Ceph` : cluster.name || 'Ceph'}
+                        <div class="overflow-hidden rounded-lg border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/35">
+                          <div class="border-b border-gray-200 bg-white px-4 py-3 dark:border-gray-700 dark:bg-gray-900/70">
+                            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                              <div class="min-w-0">
+                                <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                                  {cluster.instance ? `${cluster.instance} Ceph` : cluster.name || 'Ceph'}
+                                </div>
+                                <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                                  <span class="rounded border border-gray-200 bg-gray-50 px-2 py-0.5 font-medium text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
+                                    {cluster.health || 'Unknown'}
+                                  </span>
+                                  <span>{cluster.numOsdsUp}/{cluster.numOsds} OSD up</span>
+                                  <span>{cluster.numOsdsIn}/{cluster.numOsds} OSD in</span>
+                                  <span>{cluster.inconsistentPGs ?? 0} inconsistent PG</span>
+                                </div>
                               </div>
-                              <div class="text-xs text-gray-500 dark:text-gray-400">
-                                {cluster.health || 'Unknown'} - {cluster.numOsdsUp}/{cluster.numOsds} OSD up - {cluster.inconsistentPGs ?? 0} inconsistent PG
-                              </div>
+                              <Show when={clusterDisabled()}>
+                                <span class="inline-flex w-fit items-center rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200">
+                                  Alerts disabled
+                                </span>
+                              </Show>
                             </div>
                           </div>
-                          <div class="grid gap-2 md:grid-cols-3">
-                            {toggleRow(
-                              'Cluster Health',
-                              'cephDisableHealth',
-                              'Disable cluster health alerts',
-                              'Enable cluster health alerts',
-                            )}
-                            {toggleRow(
-                              'OSD',
-                              'cephDisableOSD',
-                              'Disable all OSD alerts for this cluster',
-                              'Enable all OSD alerts for this cluster',
-                            )}
-                            {toggleRow(
-                              'PG inconsistent',
-                              'cephDisablePG',
-                              'Disable inconsistent PG alerts',
-                              'Enable inconsistent PG alerts',
-                            )}
+
+                          <div class="space-y-4 p-4">
+                            <section>
+                              <div class="mb-2 flex items-center justify-between gap-3">
+                                <div>
+                                  <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                                    Alert Families
+                                  </h4>
+                                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                    Cluster-wide Ceph alert categories
+                                  </p>
+                                </div>
+                              </div>
+                              <div class="grid gap-2 lg:grid-cols-3">
+                                {toggleRow(
+                                  'Cluster Health',
+                                  'Health status and Ceph health checks',
+                                  'cephDisableHealth',
+                                  'Disable cluster health alerts',
+                                  'Enable cluster health alerts',
+                                )}
+                                {toggleRow(
+                                  'OSD',
+                                  'All OSD state alerts for this cluster',
+                                  'cephDisableOSD',
+                                  'Disable all OSD alerts for this cluster',
+                                  'Enable all OSD alerts for this cluster',
+                                )}
+                                {toggleRow(
+                                  'PG inconsistent',
+                                  'Placement groups reported inconsistent',
+                                  'cephDisablePG',
+                                  'Disable inconsistent PG alerts',
+                                  'Enable inconsistent PG alerts',
+                                )}
+                              </div>
+                            </section>
+
+                            <section>
+                              <div class="mb-2">
+                                <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                                  Cluster Override
+                                </h4>
+                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                  Master switch for this Ceph cluster
+                                </p>
+                              </div>
+                              <ResourceTable
+                                title=""
+                                resources={clusterResource()}
+                                columns={[]}
+                                activeAlerts={props.activeAlerts}
+                                emptyMessage="No Ceph clusters match the current filters."
+                                onEdit={startEditing}
+                                onSaveEdit={saveEdit}
+                                onCancelEdit={cancelEdit}
+                                onRemoveOverride={removeOverride}
+                                onToggleDisabled={toggleDisabled}
+                                showOfflineAlertsColumn={false}
+                                editingId={editingId}
+                                editingThresholds={editingThresholds}
+                                setEditingThresholds={setEditingThresholds}
+                                editingNote={editingNote}
+                                setEditingNote={setEditingNote}
+                                formatMetricValue={formatMetricValue}
+                                hasActiveAlert={hasActiveAlert}
+                                setHasUnsavedChanges={props.setHasUnsavedChanges}
+                                globalDisableFlag={props.disableAllCeph}
+                              />
+                            </section>
+
+                            <section>
+                              <div class="mb-2 flex flex-col gap-1 md:flex-row md:items-end md:justify-between">
+                                <div>
+                                  <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                                    OSD Overrides
+                                  </h4>
+                                  <p class="text-xs text-gray-500 dark:text-gray-400">
+                                    Disable alerting for individual OSDs
+                                  </p>
+                                </div>
+                                <div class="text-xs text-gray-500 dark:text-gray-400">
+                                  {osdOverrideCount()} override{osdOverrideCount() === 1 ? '' : 's'} / {osdResources().length} OSD
+                                </div>
+                              </div>
+                              <Show
+                                when={osdResources().length > 0}
+                                fallback={
+                                  <div class="rounded-md border border-dashed border-gray-300 px-3 py-3 text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                                    No OSD rows available for this cluster.
+                                  </div>
+                                }
+                              >
+                                <ResourceTable
+                                  title=""
+                                  resources={osdResources()}
+                                  columns={[]}
+                                  activeAlerts={props.activeAlerts}
+                                  emptyMessage="No Ceph OSDs match the current filters."
+                                  onEdit={startEditing}
+                                  onSaveEdit={saveEdit}
+                                  onCancelEdit={cancelEdit}
+                                  onRemoveOverride={removeOverride}
+                                  onToggleDisabled={toggleDisabled}
+                                  showOfflineAlertsColumn={false}
+                                  editingId={editingId}
+                                  editingThresholds={editingThresholds}
+                                  setEditingThresholds={setEditingThresholds}
+                                  editingNote={editingNote}
+                                  setEditingNote={setEditingNote}
+                                  formatMetricValue={formatMetricValue}
+                                  hasActiveAlert={hasActiveAlert}
+                                  setHasUnsavedChanges={props.setHasUnsavedChanges}
+                                  globalDisableFlag={props.disableAllCeph}
+                                />
+                              </Show>
+                            </section>
                           </div>
                         </div>
                       );
                     }}
                   </For>
                 </div>
-                <ResourceTable
-                  title=""
-                  resources={cephClustersWithOverrides()}
-                  columns={[]}
-                  activeAlerts={props.activeAlerts}
-                  emptyMessage="No Ceph clusters match the current filters."
-                  onEdit={startEditing}
-                  onSaveEdit={saveEdit}
-                  onCancelEdit={cancelEdit}
-                  onRemoveOverride={removeOverride}
-                  onToggleDisabled={toggleDisabled}
-                  showOfflineAlertsColumn={false}
-                  editingId={editingId}
-                  editingThresholds={editingThresholds}
-                  setEditingThresholds={setEditingThresholds}
-                  editingNote={editingNote}
-                  setEditingNote={setEditingNote}
-                  formatMetricValue={formatMetricValue}
-                  hasActiveAlert={hasActiveAlert}
-                  setHasUnsavedChanges={props.setHasUnsavedChanges}
-                  globalDisableFlag={props.disableAllCeph}
-                />
-                <Show when={cephOSDsWithOverrides().length > 0}>
+                <Show when={(props.cephClusters ?? []).length === 0}>
+                  <div class="rounded-lg border border-gray-200 bg-white p-6 text-sm text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300">
+                    No Ceph clusters detected.
+                  </div>
+                </Show>
+                {/*
+                  Search filtering can hide a cluster row while OSDs still match. Keep a compact
+                  all-OSD fallback for those cases so search results remain reachable.
+                */}
+                <Show
+                  when={
+                    Boolean(searchTerm()) &&
+                    cephClustersWithOverrides().length === 0 &&
+                    cephOSDsWithOverrides().length > 0
+                  }
+                >
                   <div class="mt-4">
                     <ResourceTable
                       title="Ceph OSDs"
