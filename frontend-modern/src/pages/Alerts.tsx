@@ -210,6 +210,7 @@ type OverrideType =
   | 'hostAgent'
   | 'hostDisk'
   | 'storage'
+  | 'ceph'
   | 'pbs'
   | 'pmg'
   | 'dockerHost'
@@ -989,6 +990,20 @@ export function Alerts() {
                 thresholds: extractTriggerValues(thresholds),
               });
             } else {
+              const cephCluster = (state.cephClusters || []).find((cluster) => cluster.id === key);
+              if (cephCluster) {
+                overridesList.push({
+                  id: key,
+                  name: cephCluster.name || 'Ceph',
+                  type: 'ceph',
+                  resourceType: 'Ceph',
+                  instance: cephCluster.instance,
+                  disabled: thresholds.disabled || false,
+                  thresholds: {},
+                });
+                return;
+              }
+
               // Find the guest by matching the full ID
               const vm = (state.vms || []).find((g) => g.id === key);
               const container = (state.containers || []).find((g) => g.id === key);
@@ -1036,7 +1051,10 @@ export function Alerts() {
               newOverride.type === 'dockerContainer') &&
             newOverride.disableConnectivity !== existing.disableConnectivity;
           const disabledChanged =
-            (newOverride.type === 'guest' || newOverride.type === 'storage' || newOverride.type === 'hostDisk') &&
+            (newOverride.type === 'guest' ||
+              newOverride.type === 'storage' ||
+              newOverride.type === 'ceph' ||
+              newOverride.type === 'hostDisk') &&
             newOverride.disabled !== existing.disabled;
           const severityChanged =
             (newOverride.type === 'guest' || newOverride.type === 'dockerContainer') &&
@@ -1324,6 +1342,7 @@ export function Alerts() {
       setDisableAllGuests(config.disableAllGuests ?? false);
       setDisableAllHosts(config.disableAllHosts ?? false);
       setDisableAllStorage(config.disableAllStorage ?? false);
+      setDisableAllCeph(config.disableAllCeph ?? false);
       setDisableAllPBS(config.disableAllPBS ?? false);
       setDisableAllPMG(config.disableAllPMG ?? false);
       setDisableAllDockerHosts(config.disableAllDockerHosts ?? false);
@@ -1690,6 +1709,7 @@ export function Alerts() {
   const [disableAllGuests, setDisableAllGuests] = createSignal(false);
   const [disableAllHosts, setDisableAllHosts] = createSignal(false);
   const [disableAllStorage, setDisableAllStorage] = createSignal(false);
+  const [disableAllCeph, setDisableAllCeph] = createSignal(false);
   const [disableAllPBS, setDisableAllPBS] = createSignal(false);
   const [disableAllPMG, setDisableAllPMG] = createSignal(false);
   const [disableAllDockerHosts, setDisableAllDockerHosts] = createSignal(false);
@@ -1871,6 +1891,7 @@ export function Alerts() {
                       disableAllGuests: disableAllGuests(),
                       disableAllHosts: disableAllHosts(),
                       disableAllStorage: disableAllStorage(),
+                      disableAllCeph: disableAllCeph(),
                       disableAllPBS: disableAllPBS(),
                       disableAllPMG: disableAllPMG(),
                       disableAllDockerHosts: disableAllDockerHosts(),
@@ -2246,6 +2267,8 @@ export function Alerts() {
                   setDisableAllHosts={setDisableAllHosts}
                   disableAllStorage={disableAllStorage}
                   setDisableAllStorage={setDisableAllStorage}
+                  disableAllCeph={disableAllCeph}
+                  setDisableAllCeph={setDisableAllCeph}
                   disableAllPBS={disableAllPBS}
                   setDisableAllPBS={setDisableAllPBS}
                   disableAllPMG={disableAllPMG}
@@ -3065,6 +3088,8 @@ interface ThresholdsTabProps {
   setDisableAllHosts: (value: boolean) => void;
   disableAllStorage: () => boolean;
   setDisableAllStorage: (value: boolean) => void;
+  disableAllCeph: () => boolean;
+  setDisableAllCeph: (value: boolean) => void;
   disableAllPBS: () => boolean;
   setDisableAllPBS: (value: boolean) => void;
   disableAllPMG: () => boolean;
@@ -3115,6 +3140,7 @@ function ThresholdsTab(props: ThresholdsTabProps) {
       nodes={props.state.nodes || []}
       hosts={props.hosts}
       storage={props.state.storage || []}
+      cephClusters={props.state.cephClusters || []}
       dockerHosts={props.state.dockerHosts || []}
       pbsInstances={props.state.pbs || []}
       pmgInstances={props.state.pmg || []}
@@ -3176,6 +3202,8 @@ function ThresholdsTab(props: ThresholdsTabProps) {
       setDisableAllHosts={props.setDisableAllHosts}
       disableAllStorage={props.disableAllStorage}
       setDisableAllStorage={props.setDisableAllStorage}
+      disableAllCeph={props.disableAllCeph}
+      setDisableAllCeph={props.setDisableAllCeph}
       disableAllPBS={props.disableAllPBS}
       setDisableAllPBS={props.setDisableAllPBS}
       disableAllPMG={props.disableAllPMG}

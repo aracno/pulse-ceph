@@ -3652,6 +3652,9 @@ func (m *Monitor) ApplyHostReport(report agentshost.Report, tokenRecord *config.
 	if report.Ceph != nil {
 		cephCluster := convertAgentCephToGlobalCluster(report.Ceph, hostname, identifier, timestamp)
 		m.state.UpsertCephCluster(cephCluster)
+		if m.alertManager != nil {
+			m.alertManager.CheckCephCluster(cephCluster)
+		}
 		log.Debug().
 			Str("hostId", identifier).
 			Str("hostname", hostname).
@@ -12170,6 +12173,9 @@ func (m *Monitor) checkMockAlerts() {
 			Float64("usage", storage.Usage).
 			Msg("Checking storage for alerts")
 		m.alertManager.CheckStorage(storage)
+	}
+	for _, cluster := range state.CephClusters {
+		m.alertManager.CheckCephCluster(cluster)
 	}
 
 	// Check alerts for PBS instances

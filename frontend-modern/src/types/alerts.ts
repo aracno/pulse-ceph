@@ -215,6 +215,7 @@ export interface AlertConfig {
   disableAllNodes?: boolean;
   disableAllGuests?: boolean;
   disableAllStorage?: boolean;
+  disableAllCeph?: boolean;
   disableAllPBS?: boolean;
   disableAllPMG?: boolean;
   disableAllHosts?: boolean;

@@ -2023,16 +2023,26 @@ func (m *Monitor) pollStorageWithNodes(ctx context.Context, instanceName string,
 		switch {
 		case !cephDetected:
 			m.state.UpdateCephClustersForInstance(instanceName, []models.CephCluster{})
+			if m.alertManager != nil {
+				m.alertManager.SyncCephAlertsForInstance(instanceName, []models.CephCluster{})
+			}
 		case cephFetchAttempted && cephFetchFailed:
 			// Preserve previous Ceph state when the refresh fails.
 		case cephFetchAttempted && cephStatus == nil:
 			m.state.UpdateCephClustersForInstance(instanceName, []models.CephCluster{})
+			if m.alertManager != nil {
+				m.alertManager.SyncCephAlertsForInstance(instanceName, []models.CephCluster{})
+			}
 		default:
 			cluster := buildCephClusterModel(instanceName, cephStatus, cephDF)
 			if cluster.ID == "" {
 				cluster.ID = instanceName
 			}
 			m.state.UpdateCephClustersForInstance(instanceName, []models.CephCluster{cluster})
+			if m.alertManager != nil {
+				m.alertManager.CheckCephCluster(cluster)
+				m.alertManager.SyncCephAlertsForInstance(instanceName, []models.CephCluster{cluster})
+			}
 		}
 	}
 

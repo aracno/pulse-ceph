@@ -86,6 +86,7 @@ Access the dashboard at `http://<your-ip>:7655`.
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)**: Solutions to common issues.
 - **[Agent Security](docs/AGENT_SECURITY.md)**: Details on checksum-verified updates and verification.
 - **[Docker Monitoring](docs/DOCKER.md)**: Setup and management of Docker agents.
+- **[Ceph Alerting](docs/CEPH_ALERTING.md)**: Ceph health and OSD-state alerts for Proxmox clusters.
 
 ## 🌐 Community Integrations
 

@@ -13,6 +13,7 @@ import Camera from 'lucide-solid/icons/camera';
 import Mail from 'lucide-solid/icons/mail';
 import Users from 'lucide-solid/icons/users';
 import Boxes from 'lucide-solid/icons/boxes';
+import CircleDotDashed from 'lucide-solid/icons/circle-dot-dashed';
 
 // Workaround for eslint false-positive when `For` is used only in JSX
 const __ensureForUsage = For;
@@ -26,6 +27,7 @@ import type {
   Storage,
   PBSInstance,
   PMGInstance,
+  CephCluster,
   DockerHost,
   DockerContainer,
   PVEBackups,
@@ -49,6 +51,7 @@ type OverrideType =
   | 'hostAgent'
   | 'hostDisk'
   | 'storage'
+  | 'ceph'
   | 'pbs'
   | 'pmg'
   | 'dockerHost'
@@ -170,6 +173,7 @@ interface ThresholdsTableProps {
   dockerHosts: DockerHost[];
   pbsInstances?: PBSInstance[]; // PBS instances from state
   pmgInstances?: PMGInstance[]; // PMG instances from state
+  cephClusters?: CephCluster[];
   backups?: Backups;
   pveBackups?: PVEBackups;
   pbsBackups?: PBSBackup[];
@@ -312,6 +316,8 @@ interface ThresholdsTableProps {
   setDisableAllHosts: (value: boolean) => void;
   disableAllStorage: () => boolean;
   setDisableAllStorage: (value: boolean) => void;
+  disableAllCeph: () => boolean;
+  setDisableAllCeph: (value: boolean) => void;
   disableAllPBS: () => boolean;
   setDisableAllPBS: (value: boolean) => void;
   disableAllPMG: () => boolean;
@@ -1767,6 +1773,50 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
     return grouped;
   });
 
+  const cephClustersWithOverrides = createMemo<Resource[]>((prev = []) => {
+    if (editingId()) {
+      return prev;
+    }
+
+    const search = searchTerm().toLowerCase();
+    const overridesMap = new Map((props.overrides() ?? []).map((o) => [o.id, o]));
+    const clusters = (props.cephClusters ?? []).map((cluster) => {
+      const override = overridesMap.get(cluster.id);
+      const osdSummary =
+        cluster.numOsds > 0
+          ? `${cluster.numOsdsUp}/${cluster.numOsds} up, ${cluster.numOsdsIn}/${cluster.numOsds} in`
+          : 'OSD state unavailable';
+      const health = cluster.health || 'Unknown';
+      const subtitle = `${health} - ${osdSummary}`;
+
+      return {
+        id: cluster.id,
+        name: cluster.name || 'Ceph',
+        displayName: cluster.instance ? `${cluster.instance} Ceph` : cluster.name || 'Ceph',
+        type: 'ceph' as const,
+        resourceType: 'Ceph',
+        instance: cluster.instance,
+        status: health,
+        subtitle,
+        hasOverride: Boolean(override?.disabled),
+        disabled: override?.disabled || false,
+        thresholds: {},
+        defaults: {},
+        editable: false,
+      };
+    });
+
+    if (search) {
+      return clusters.filter(
+        (cluster) =>
+          cluster.name.toLowerCase().includes(search) ||
+          cluster.displayName?.toLowerCase().includes(search) ||
+          cluster.status?.toLowerCase().includes(search),
+      );
+    }
+    return clusters;
+  }, []);
+
   const summaryItems = createMemo(() => {
     try {
       const items = [
@@ -1803,6 +1853,13 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
           label: 'Storage',
           total: props.storage?.length ?? 0,
           overrides: countOverrides(storageWithOverrides()),
+          tab: 'proxmox' as const,
+        },
+        {
+          key: 'ceph' as const,
+          label: 'Ceph',
+          total: props.cephClusters?.length ?? 0,
+          overrides: countOverrides(cephClustersWithOverrides()),
           tab: 'proxmox' as const,
         },
         {
@@ -1884,6 +1941,7 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
       ...allGuests,
       ...allDockerContainers,
       ...storageWithOverrides(),
+      ...cephClustersWithOverrides(),
       ...pbsServersWithOverrides(),
     ];
     const resource = allResources.find((r) => r.id === resourceId);
@@ -2235,6 +2293,7 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
       ...allGuests,
       ...allDockerContainers,
       ...storageWithOverrides(),
+      ...cephClustersWithOverrides(),
       ...pbsServersWithOverrides(),
       ...hostAgentsWithOverrides(),
       ...hostDisksWithOverrides(),
@@ -2244,6 +2303,7 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
       !resource ||
       (resource.type !== 'guest' &&
         resource.type !== 'storage' &&
+        resource.type !== 'ceph' &&
         resource.type !== 'pbs' &&
         resource.type !== 'dockerContainer' &&
         resource.type !== 'hostAgent' &&
@@ -2354,6 +2414,12 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
           (alert) =>
             alert.resourceId === resourceId &&
             (alert.type === 'docker-container-state' || alert.type === 'docker-container-health'),
+        );
+      } else if (resource.type === 'ceph') {
+        props.removeAlerts(
+          (alert) =>
+            alert.resourceId === resourceId &&
+            (alert.type === 'ceph-health' || alert.type === 'ceph-osd-state'),
         );
       }
     }
@@ -3303,6 +3369,53 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
                       : undefined
                   }
                   onResetDefaults={props.resetStorageDefault}
+                />
+              </div>
+            </CollapsibleSection>
+          </Show>
+
+          <Show when={hasSection('ceph')}>
+            <CollapsibleSection
+              id="ceph"
+              title="Ceph"
+              resourceCount={cephClustersWithOverrides().length}
+              collapsed={isCollapsed('ceph')}
+              onToggle={() => toggleSection('ceph')}
+              icon={<CircleDotDashed class="w-5 h-5" />}
+              isGloballyDisabled={props.disableAllCeph()}
+              emptyMessage="No Ceph clusters detected."
+              headerActions={
+                <Toggle
+                  size="sm"
+                  checked={!props.disableAllCeph()}
+                  onToggle={() => props.setDisableAllCeph(!props.disableAllCeph())}
+                  title={props.disableAllCeph() ? 'Enable Ceph alerts' : 'Disable Ceph alerts'}
+                  ariaLabel="Toggle Ceph alerts"
+                />
+              }
+            >
+              <div ref={registerSection('ceph')} class="scroll-mt-24">
+                <ResourceTable
+                  title=""
+                  resources={cephClustersWithOverrides()}
+                  columns={[]}
+                  activeAlerts={props.activeAlerts}
+                  emptyMessage="No Ceph clusters match the current filters."
+                  onEdit={startEditing}
+                  onSaveEdit={saveEdit}
+                  onCancelEdit={cancelEdit}
+                  onRemoveOverride={removeOverride}
+                  onToggleDisabled={toggleDisabled}
+                  showOfflineAlertsColumn={false}
+                  editingId={editingId}
+                  editingThresholds={editingThresholds}
+                  setEditingThresholds={setEditingThresholds}
+                  editingNote={editingNote}
+                  setEditingNote={setEditingNote}
+                  formatMetricValue={formatMetricValue}
+                  hasActiveAlert={hasActiveAlert}
+                  setHasUnsavedChanges={props.setHasUnsavedChanges}
+                  globalDisableFlag={props.disableAllCeph}
                 />
               </div>
             </CollapsibleSection>
