@@ -1795,8 +1795,8 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
 
       return {
         id: cluster.id,
-        name: cluster.name || 'Ceph',
-        displayName: cluster.instance ? `${cluster.instance} Ceph` : cluster.name || 'Ceph',
+        name: cluster.name || cluster.instance || 'Ceph',
+        displayName: cluster.name || cluster.instance || 'Ceph',
         type: 'ceph' as const,
         resourceType: 'Ceph',
         instance: cluster.instance,
@@ -1890,6 +1890,29 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
 
   const cephOSDsForCluster = (clusterId: string) =>
     cephOSDsWithOverrides().filter((osd) => osd.id.startsWith(`${clusterId}:osd:`));
+
+  const groupedCephOSDsForCluster = (clusterId: string) => {
+    const grouped: Record<string, Resource[]> = {};
+    cephOSDsForCluster(clusterId).forEach((osd) => {
+      const group = osd.node || 'Unassigned';
+      if (!grouped[group]) {
+        grouped[group] = [];
+      }
+      grouped[group].push(osd);
+    });
+    return grouped;
+  };
+
+  const cephOSDGroupMetaForCluster = (clusterId: string) => {
+    const meta: Record<string, GroupHeaderMeta> = {};
+    Object.keys(groupedCephOSDsForCluster(clusterId)).forEach((nodeName) => {
+      meta[nodeName] = {
+        type: 'node',
+        displayName: nodeName,
+      };
+    });
+    return meta;
+  };
 
   const summaryItems = createMemo(() => {
     try {
@@ -3641,7 +3664,7 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
                             <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                               <div class="min-w-0">
                                 <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                                  {cluster.instance ? `${cluster.instance} Ceph` : cluster.name || 'Ceph'}
+                                  {cluster.name || cluster.instance || 'Ceph'}
                                 </div>
                                 <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
                                   <span class="rounded border border-gray-200 bg-gray-50 px-2 py-0.5 font-medium text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
@@ -3754,7 +3777,8 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
                               >
                                 <ResourceTable
                                   title=""
-                                  resources={osdResources()}
+                                  groupedResources={groupedCephOSDsForCluster(cluster.id)}
+                                  groupHeaderMeta={cephOSDGroupMetaForCluster(cluster.id)}
                                   columns={[]}
                                   activeAlerts={props.activeAlerts}
                                   emptyMessage="No Ceph OSDs match the current filters."

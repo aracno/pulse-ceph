@@ -3650,7 +3650,8 @@ func (m *Monitor) ApplyHostReport(report agentshost.Report, tokenRecord *config.
 
 	// If host reports Ceph data, also update the global CephClusters state
 	if report.Ceph != nil {
-		cephCluster := convertAgentCephToGlobalCluster(report.Ceph, hostname, identifier, timestamp)
+		cephClusterName, cephNodeName := m.agentCephClusterContext(hostname, linkedNodeID)
+		cephCluster := convertAgentCephToGlobalCluster(report.Ceph, hostname, identifier, timestamp, cephClusterName, cephNodeName)
 		m.state.UpsertCephCluster(cephCluster)
 		if m.alertManager != nil {
 			m.alertManager.CheckCephCluster(cephCluster)
@@ -3728,6 +3729,31 @@ func (m *Monitor) ApplyHostReport(report agentshost.Report, tokenRecord *config.
 	}
 
 	return host, nil
+}
+
+func (m *Monitor) agentCephClusterContext(hostname, linkedNodeID string) (clusterName, nodeName string) {
+	nodeName = strings.TrimSpace(hostname)
+	if linkedNodeID == "" {
+		return nodeName, nodeName
+	}
+
+	state := m.GetState()
+	for _, node := range state.Nodes {
+		if node.ID != linkedNodeID {
+			continue
+		}
+		nodeName = strings.TrimSpace(node.Name)
+		clusterName = strings.TrimSpace(node.ClusterName)
+		if clusterName == "" {
+			clusterName = strings.TrimSpace(node.Instance)
+		}
+		if clusterName == "" {
+			clusterName = nodeName
+		}
+		return clusterName, nodeName
+	}
+
+	return nodeName, nodeName
 }
 
 // findLinkedProxmoxEntity searches for a PVE node, VM, or container with a matching hostname.
@@ -12353,17 +12379,26 @@ func convertAgentCephToModels(ceph *agentshost.CephCluster) *models.HostCephClus
 
 // convertAgentCephToGlobalCluster converts agent Ceph data to the global CephCluster format
 // used by the State.CephClusters list.
-func convertAgentCephToGlobalCluster(ceph *agentshost.CephCluster, hostname, hostID string, timestamp time.Time) models.CephCluster {
+func convertAgentCephToGlobalCluster(ceph *agentshost.CephCluster, hostname, _ string, timestamp time.Time, clusterName, nodeName string) models.CephCluster {
+	clusterName = strings.TrimSpace(clusterName)
+	if clusterName == "" {
+		clusterName = strings.TrimSpace(hostname)
+	}
+	nodeName = strings.TrimSpace(nodeName)
+	if nodeName == "" {
+		nodeName = strings.TrimSpace(hostname)
+	}
+
 	// Use FSID as the primary ID since it's unique per Ceph cluster
 	id := ceph.FSID
 	if id == "" {
-		id = "agent-ceph-" + hostID
+		id = "agent-ceph-" + clusterName
 	}
 
 	cluster := models.CephCluster{
 		ID:              id,
-		Instance:        "agent:" + hostname,
-		Name:            hostname + " Ceph",
+		Instance:        clusterName,
+		Name:            clusterName,
 		FSID:            ceph.FSID,
 		Health:          strings.TrimPrefix(ceph.Health.Status, "HEALTH_"),
 		TotalBytes:      int64(ceph.PGMap.BytesTotal),
@@ -12396,10 +12431,14 @@ func convertAgentCephToGlobalCluster(ceph *agentshost.CephCluster, hostname, hos
 		if name == "" {
 			name = fmt.Sprintf("osd.%d", osd.ID)
 		}
+		host := strings.TrimSpace(osd.Host)
+		if host == "" && len(ceph.OSDMap.OSDs) == ceph.OSDMap.NumOSDs {
+			host = nodeName
+		}
 		cluster.OSDs = append(cluster.OSDs, models.CephOSD{
 			ID:     osd.ID,
 			Name:   name,
-			Host:   osd.Host,
+			Host:   host,
 			Up:     osd.Up,
 			In:     osd.In,
 			State:  append([]string(nil), osd.State...),

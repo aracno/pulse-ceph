@@ -1094,7 +1094,7 @@ func TestMonitor_PollGuestSnapshots_Extra(t *testing.T) {
 func TestMonitor_CephConversion_Extra(t *testing.T) {
 	// Just call the functions to get coverage
 	convertAgentCephToModels(nil)
-	convertAgentCephToGlobalCluster(&agentshost.CephCluster{}, "host1", "host1", time.Now())
+	convertAgentCephToGlobalCluster(&agentshost.CephCluster{}, "host1", "host1", time.Now(), "cluster1", "host1")
 }
 
 func TestMonitor_EnrichContainerMetadata_Extra(t *testing.T) {
@@ -1425,7 +1425,7 @@ func TestMonitor_CephConversion_Detailed_Extra(t *testing.T) {
 	}
 
 	// Test convertAgentCephToGlobalCluster with populated data
-	global := convertAgentCephToGlobalCluster(ceph, "host1", "h1", time.Now())
+	global := convertAgentCephToGlobalCluster(ceph, "host1", "h1", time.Now(), "cluster1", "host1")
 	if global.ID != "fsid" {
 		t.Errorf("Expected global ID fsid, got %s", global.ID)
 	}
@@ -1438,9 +1438,9 @@ func TestMonitor_CephConversion_Detailed_Extra(t *testing.T) {
 
 	// Test with missing FSID
 	cephEmpty := &agentshost.CephCluster{}
-	globalEmpty := convertAgentCephToGlobalCluster(cephEmpty, "host1", "h1", time.Now())
-	if globalEmpty.ID != "agent-ceph-h1" {
-		t.Errorf("Expected generated ID agent-ceph-h1, got %s", globalEmpty.ID)
+	globalEmpty := convertAgentCephToGlobalCluster(cephEmpty, "host1", "h1", time.Now(), "cluster1", "host1")
+	if globalEmpty.ID != "agent-ceph-cluster1" {
+		t.Errorf("Expected generated ID agent-ceph-cluster1, got %s", globalEmpty.ID)
 	}
 }
 

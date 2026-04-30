@@ -1,6 +1,7 @@
 package models
 
 import (
+	"sort"
 	"strings"
 	"time"
 )
@@ -482,25 +483,19 @@ func (s StateSnapshot) ToFrontend() StateFrontend {
 		storage[i] = st.ToFrontend()
 	}
 
-	// Convert Ceph clusters - deduplicate by FSID (same cluster may be reported from multiple sources)
-	// When PVE and host agent both report the same Ceph cluster, prefer the one with more data
+	// Convert Ceph clusters - deduplicate by FSID or logical cluster name.
+	// Host agents on several nodes can report the same Ceph cluster independently.
 	cephByFSID := make(map[string]CephCluster)
 	for _, cluster := range s.CephClusters {
-		fsid := cluster.FSID
-		if fsid == "" {
-			fsid = cluster.ID // fallback for clusters without FSID
-		}
+		fsid := cephClusterMergeKey(cluster)
 		existing, exists := cephByFSID[fsid]
 		if !exists {
 			cephByFSID[fsid] = cluster
 			continue
 		}
-		// Keep the cluster with more complete data (more monitors/managers/pools reported)
-		existingScore := existing.NumMons + existing.NumMgrs + len(existing.Pools)
-		newScore := cluster.NumMons + cluster.NumMgrs + len(cluster.Pools)
-		if newScore > existingScore {
-			cephByFSID[fsid] = cluster
-		}
+
+		merged := mergeCephClusters(existing, cluster)
+		cephByFSID[fsid] = merged
 	}
 	cephClusters := make([]CephClusterFrontend, 0, len(cephByFSID))
 	for _, cluster := range cephByFSID {
@@ -541,4 +536,112 @@ func (s StateSnapshot) ToFrontend() StateFrontend {
 		TemperatureMonitoringEnabled: s.TemperatureMonitoringEnabled,
 		PVETagColors:                 s.PVETagColors,
 	}
+}
+
+func cephClusterMergeKey(cluster CephCluster) string {
+	if strings.TrimSpace(cluster.FSID) != "" {
+		return "fsid:" + strings.TrimSpace(cluster.FSID)
+	}
+	if strings.TrimSpace(cluster.Instance) != "" && !strings.HasPrefix(cluster.Instance, "agent:") {
+		return "cluster:" + strings.TrimSpace(cluster.Instance)
+	}
+	if strings.TrimSpace(cluster.Name) != "" {
+		name := strings.TrimSuffix(strings.TrimSpace(cluster.Name), " Ceph")
+		return "cluster:" + name
+	}
+	return "id:" + cluster.ID
+}
+
+func mergeCephClusters(existing, incoming CephCluster) CephCluster {
+	// Keep the richer cluster as the base, then merge detail lists from both.
+	existingScore := cephClusterCompletenessScore(existing)
+	incomingScore := cephClusterCompletenessScore(incoming)
+	base := existing
+	other := incoming
+	if incomingScore > existingScore {
+		base = incoming
+		other = existing
+	}
+
+	if base.LastUpdated.Before(other.LastUpdated) {
+		base.LastUpdated = other.LastUpdated
+	}
+	if base.Health == "" || base.Health == "UNKNOWN" {
+		base.Health = other.Health
+	}
+	if base.HealthMessage == "" {
+		base.HealthMessage = other.HealthMessage
+	}
+	if base.FSID == "" {
+		base.FSID = other.FSID
+	}
+	if base.Instance == "" || strings.HasPrefix(base.Instance, "agent:") {
+		base.Instance = other.Instance
+	}
+	if base.Name == "" || strings.HasSuffix(base.Name, " Ceph") {
+		base.Name = other.Name
+	}
+	if other.NumOSDs > base.NumOSDs {
+		base.NumOSDs = other.NumOSDs
+	}
+	if other.NumOSDsUp > base.NumOSDsUp {
+		base.NumOSDsUp = other.NumOSDsUp
+	}
+	if other.NumOSDsIn > base.NumOSDsIn {
+		base.NumOSDsIn = other.NumOSDsIn
+	}
+	if other.InconsistentPGs > base.InconsistentPGs {
+		base.InconsistentPGs = other.InconsistentPGs
+	}
+	base.OSDs = mergeCephOSDs(existing.OSDs, incoming.OSDs)
+	if len(base.Pools) == 0 {
+		base.Pools = other.Pools
+	}
+	if len(base.Services) == 0 {
+		base.Services = other.Services
+	}
+	return base
+}
+
+func cephClusterCompletenessScore(cluster CephCluster) int {
+	score := cluster.NumMons + cluster.NumMgrs + len(cluster.Pools) + len(cluster.Services)
+	if len(cluster.OSDs) > 0 {
+		score += len(cluster.OSDs) * 2
+	}
+	if cluster.FSID != "" {
+		score += 10
+	}
+	return score
+}
+
+func mergeCephOSDs(left, right []CephOSD) []CephOSD {
+	byID := make(map[int]CephOSD)
+	for _, osd := range append(append([]CephOSD(nil), left...), right...) {
+		existing, exists := byID[osd.ID]
+		if !exists || cephOSDCompletenessScore(osd) > cephOSDCompletenessScore(existing) {
+			byID[osd.ID] = osd
+		}
+	}
+	merged := make([]CephOSD, 0, len(byID))
+	for _, osd := range byID {
+		merged = append(merged, osd)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].ID < merged[j].ID
+	})
+	return merged
+}
+
+func cephOSDCompletenessScore(osd CephOSD) int {
+	score := 0
+	if osd.Host != "" {
+		score += 4
+	}
+	if len(osd.State) > 0 {
+		score += 2
+	}
+	if !osd.Synthetic {
+		score += 8
+	}
+	return score
 }

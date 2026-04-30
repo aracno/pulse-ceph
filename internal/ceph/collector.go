@@ -172,6 +172,12 @@ func Collect(ctx context.Context) (*ClusterStatus, error) {
 		}
 	}
 
+	if treeJSON, err := runCephCommand(ctx, "osd", "tree", "--format", "json"); err == nil {
+		if osds, err := parseOSDTree(treeJSON); err == nil && len(osds) > 0 {
+			status.OSDMap.OSDs = osds
+		}
+	}
+
 	status.CollectedAt = time.Now().UTC()
 	return status, nil
 }
@@ -189,6 +195,78 @@ func runCephCommand(ctx context.Context, args ...string) ([]byte, error) {
 	}
 
 	return stdout, nil
+}
+
+func parseOSDTree(data []byte) ([]OSD, error) {
+	var raw struct {
+		Nodes []struct {
+			ID          int     `json:"id"`
+			Name        string  `json:"name"`
+			Type        string  `json:"type"`
+			Status      string  `json:"status"`
+			Exists      int     `json:"exists"`
+			Reweight    float64 `json:"reweight"`
+			CrushWeight float64 `json:"crush_weight"`
+			Children    []int   `json:"children"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+
+	hostByChild := make(map[int]string)
+	for _, node := range raw.Nodes {
+		if node.Type != "host" {
+			continue
+		}
+		host := strings.TrimSpace(node.Name)
+		for _, child := range node.Children {
+			hostByChild[child] = host
+		}
+	}
+
+	osds := make([]OSD, 0)
+	for _, node := range raw.Nodes {
+		if node.Type != "osd" {
+			continue
+		}
+		name := strings.TrimSpace(node.Name)
+		if name == "" {
+			name = fmt.Sprintf("osd.%d", node.ID)
+		}
+		weight := node.Reweight
+		if weight == 0 {
+			weight = node.CrushWeight
+		}
+		state := make([]string, 0, 2)
+		up := strings.EqualFold(node.Status, "up")
+		if up {
+			state = append(state, "up")
+		} else if node.Status != "" {
+			state = append(state, strings.ToLower(node.Status))
+		} else {
+			state = append(state, "unknown")
+		}
+		in := node.Exists != 0 && weight > 0
+		if in {
+			state = append(state, "in")
+		} else {
+			state = append(state, "out")
+		}
+		osds = append(osds, OSD{
+			ID:     node.ID,
+			Name:   name,
+			Host:   hostByChild[node.ID],
+			Up:     up,
+			In:     in,
+			State:  state,
+			Weight: weight,
+		})
+	}
+	sort.Slice(osds, func(i, j int) bool {
+		return osds[i].ID < osds[j].ID
+	})
+	return osds, nil
 }
 
 // parseStatus parses the output of `ceph status --format json`.
