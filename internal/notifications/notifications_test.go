@@ -2748,7 +2748,7 @@ func TestSendHTMLEmailWithError_ExistingEmailManager(t *testing.T) {
 		EmailConfig: EmailConfig{
 			From:     "old@example.com",
 			To:       []string{"old-recipient@example.com"},
-			SMTPHost: "old.localhost.test",
+			SMTPHost: "invalid.localhost.test",
 			SMTPPort: 25,
 		},
 	})
@@ -2761,18 +2761,73 @@ func TestSendHTMLEmailWithError_ExistingEmailManager(t *testing.T) {
 		From:     "new@example.com",
 		To:       []string{"new-recipient@example.com"},
 		SMTPHost: "invalid.localhost.test",
-		SMTPPort: 587,
+		SMTPPort: 25,
 	}
 
-	// Will fail but exercises the "update existing manager config" path
+	// Will fail but exercises the "update existing manager config" path when the
+	// passed config matches the persisted SMTP target.
 	err := nm.sendHTMLEmailWithError("Test Subject", "<p>test</p>", "test", config)
 	if err == nil {
 		t.Error("expected error for invalid SMTP host")
 	}
 
-	// Verify the manager's config was updated
+	// Verify the manager's config From/To were updated (matching SMTP target path).
 	if existingManager.config.EmailConfig.From != "new@example.com" {
 		t.Errorf("expected From to be updated to 'new@example.com', got %q", existingManager.config.EmailConfig.From)
+	}
+}
+
+// TestSendHTMLEmailWithError_DifferingConfigDoesNotMutateManager guards
+// against #1440: a test send with edited but unsaved SMTP settings must
+// not leak stale auth fields into the SMTP exchange via the shared
+// production manager. When the passed config's SMTP target differs from
+// the manager's persisted config, a fresh manager is built and the
+// shared one is left untouched.
+func TestSendHTMLEmailWithError_DifferingConfigDoesNotMutateManager(t *testing.T) {
+	existingManager := NewEnhancedEmailManager(EmailProviderConfig{
+		EmailConfig: EmailConfig{
+			From:     "saved@example.com",
+			To:       []string{"saved-recipient@example.com"},
+			SMTPHost: "saved.localhost.test",
+			SMTPPort: 587,
+			Username: "saved-user",
+			Password: "saved-pass",
+		},
+		AuthRequired: true,
+	})
+
+	nm := &NotificationManager{
+		emailManager: existingManager,
+	}
+
+	// Test send against a different SMTP target with no credentials
+	// (e.g. the relay-mode test in #1440).
+	config := EmailConfig{
+		From:     "test@example.com",
+		To:       []string{"test-recipient@example.com"},
+		SMTPHost: "invalid.localhost.test",
+		SMTPPort: 25,
+		// Username/Password deliberately empty.
+	}
+
+	err := nm.sendHTMLEmailWithError("Test Subject", "<p>test</p>", "test", config)
+	if err == nil {
+		t.Error("expected error for unreachable SMTP host")
+	}
+
+	// The shared production manager must be untouched: stale auth fields
+	// must not leak from the test send into future production sends.
+	if got := existingManager.config.EmailConfig.SMTPHost; got != "saved.localhost.test" {
+		t.Errorf("shared manager SMTPHost was mutated: got %q, want %q", got, "saved.localhost.test")
+	}
+	if got := existingManager.config.EmailConfig.Username; got != "saved-user" {
+		t.Errorf("shared manager Username was mutated: got %q, want %q", got, "saved-user")
+	}
+	if got := existingManager.config.EmailConfig.From; got != "saved@example.com" {
+		t.Errorf("shared manager From was mutated: got %q, want %q", got, "saved@example.com")
+	}
+	if !existingManager.config.AuthRequired {
+		t.Error("shared manager AuthRequired was cleared by a test send")
 	}
 }
 

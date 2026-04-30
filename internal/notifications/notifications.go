@@ -1705,13 +1705,12 @@ func (n *NotificationManager) sendHTMLEmailWithError(subject, htmlBody, textBody
 	manager := n.emailManager
 	n.mu.RUnlock()
 
-	if manager == nil {
-		// Create email manager if not yet initialized
+	buildFreshManager := func() *EnhancedEmailManager {
 		rl := config.RateLimit
 		if rl <= 0 {
 			rl = 60
 		}
-		enhancedConfig := EmailProviderConfig{
+		return NewEnhancedEmailManager(EmailProviderConfig{
 			EmailConfig: EmailConfig{
 				From:     config.From,
 				To:       recipients,
@@ -1719,6 +1718,9 @@ func (n *NotificationManager) sendHTMLEmailWithError(subject, htmlBody, textBody
 				SMTPPort: config.SMTPPort,
 				Username: config.Username,
 				Password: config.Password,
+				TLS:      config.TLS,
+				StartTLS: config.StartTLS,
+				Provider: config.Provider,
 			},
 			Provider:      config.Provider,
 			StartTLS:      config.StartTLS,
@@ -1727,12 +1729,30 @@ func (n *NotificationManager) sendHTMLEmailWithError(subject, htmlBody, textBody
 			RateLimit:     rl,
 			SkipTLSVerify: false,
 			AuthRequired:  config.Username != "" && config.Password != "",
-		}
-		manager = NewEnhancedEmailManager(enhancedConfig)
+		})
+	}
+
+	if manager == nil {
+		manager = buildFreshManager()
 	} else {
-		// Update manager's config but preserve rate limiter
-		manager.config.EmailConfig.From = config.From
-		manager.config.EmailConfig.To = recipients
+		// If the passed config differs from the manager's persisted config (e.g. a
+		// test send made against unsaved edits), build a fresh manager so stale
+		// auth fields cannot leak into the SMTP exchange. The shared production
+		// manager stays untouched. When the configs match, reuse the shared
+		// manager so its rate limiter keeps working.
+		persisted := manager.config.EmailConfig
+		if persisted.SMTPHost != config.SMTPHost ||
+			persisted.SMTPPort != config.SMTPPort ||
+			persisted.Username != config.Username ||
+			persisted.Password != config.Password ||
+			persisted.TLS != config.TLS ||
+			persisted.StartTLS != config.StartTLS ||
+			persisted.Provider != config.Provider {
+			manager = buildFreshManager()
+		} else {
+			manager.config.EmailConfig.From = config.From
+			manager.config.EmailConfig.To = recipients
+		}
 	}
 
 	log.Info().
