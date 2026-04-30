@@ -11101,6 +11101,21 @@ func (m *Monitor) pollGuestSnapshots(ctx context.Context, instanceName string, c
 		}
 	}
 
+	// Capture previously-known snapshots for this instance before polling.
+	// On a partial-failure cycle (per-VM error or context deadline mid-loop)
+	// we merge fresh results with previous data so guests we couldn't reach
+	// this round keep their last-known snapshot list. Without this, an
+	// intermittently-failing VM — or one that exhausts the snapshot poll
+	// budget before its turn — would have its snapshots silently dropped
+	// from state until the next successful poll, hiding newly-created
+	// snapshots from the user (#1437).
+	previousSnapshots := make([]models.GuestSnapshot, 0)
+	for _, snap := range snapshot.PVEBackups.GuestSnapshots {
+		if snap.Instance == instanceName {
+			previousSnapshots = append(previousSnapshots, snap)
+		}
+	}
+
 	guestKey := func(instance, node string, vmid int) string {
 		if instance == node {
 			return fmt.Sprintf("%s-%d", node, vmid)
@@ -11169,6 +11184,10 @@ func (m *Monitor) pollGuestSnapshots(ctx context.Context, instanceName string, c
 
 	var allSnapshots []models.GuestSnapshot
 	deadlineExceeded := false
+	// Track which guests we successfully polled this cycle so we can preserve
+	// previously-known snapshots for the rest. Key shape matches the
+	// guestKey closure above so VMs and containers share the same namespace.
+	polledGuestKeys := make(map[string]struct{})
 
 	// Poll VM snapshots
 	for _, vm := range vms {
@@ -11199,6 +11218,7 @@ func (m *Monitor) pollGuestSnapshots(ctx context.Context, instanceName string, c
 			continue
 		}
 
+		polledGuestKeys[guestKey(instanceName, vm.Node, vm.VMID)] = struct{}{}
 		for _, snap := range snapshots {
 			snapshot := models.GuestSnapshot{
 				ID:          fmt.Sprintf("%s-%s-%d-%s", instanceName, vm.Node, vm.VMID, snap.Name),
@@ -11217,18 +11237,17 @@ func (m *Monitor) pollGuestSnapshots(ctx context.Context, instanceName string, c
 		}
 	}
 
-	if deadlineExceeded {
-		log.Warn().
-			Str("instance", instanceName).
-			Msg("Guest snapshot polling timed out before completing VM collection; retaining previous snapshots")
-		return
-	}
-
-	// Poll container snapshots
+	// Poll container snapshots. We continue into this loop even if the VM
+	// loop hit the deadline so containers still get a chance — the deadline
+	// flag is used at the end to decide whether to merge previous data.
 	for _, ct := range containers {
 		// Skip templates
 		if ct.Template {
 			continue
+		}
+		if snapshotCtx.Err() != nil {
+			deadlineExceeded = true
+			break
 		}
 
 		snapshots, err := client.GetContainerSnapshots(snapshotCtx, ct.Node, ct.VMID)
@@ -11246,7 +11265,9 @@ func (m *Monitor) pollGuestSnapshots(ctx context.Context, instanceName string, c
 			// API error 596 means snapshots not supported/available - this is expected for many containers
 			errStr := err.Error()
 			if strings.Contains(errStr, "596") || strings.Contains(errStr, "not available") {
-				// Silently skip containers without snapshot support
+				// Silently skip containers without snapshot support; treat
+				// as polled so we don't hold stale snapshots forever.
+				polledGuestKeys[guestKey(instanceName, ct.Node, ct.VMID)] = struct{}{}
 				continue
 			}
 			// Log other errors at debug level
@@ -11259,6 +11280,7 @@ func (m *Monitor) pollGuestSnapshots(ctx context.Context, instanceName string, c
 			continue
 		}
 
+		polledGuestKeys[guestKey(instanceName, ct.Node, ct.VMID)] = struct{}{}
 		for _, snap := range snapshots {
 			snapshot := models.GuestSnapshot{
 				ID:          fmt.Sprintf("%s-%s-%d-%s", instanceName, ct.Node, ct.VMID, snap.Name),
@@ -11277,14 +11299,34 @@ func (m *Monitor) pollGuestSnapshots(ctx context.Context, instanceName string, c
 		}
 	}
 
-	if deadlineExceeded || snapshotCtx.Err() != nil {
-		log.Warn().
-			Str("instance", instanceName).
-			Msg("Guest snapshot polling timed out before completion; retaining previous snapshots")
-		return
+	// Merge: for guests we couldn't poll this cycle (per-VM error or the
+	// snapshot-budget deadline fired mid-loop), keep their previously-known
+	// snapshots so transient failures don't blank them. Successfully-polled
+	// guests are represented by polledGuestKeys; their fresh data already
+	// lives in allSnapshots, so we skip them here.
+	carriedForward := 0
+	for _, prev := range previousSnapshots {
+		if _, polled := polledGuestKeys[guestKey(instanceName, prev.Node, prev.VMID)]; polled {
+			continue
+		}
+		allSnapshots = append(allSnapshots, prev)
+		carriedForward++
 	}
 
-	if len(allSnapshots) > 0 {
+	if deadlineExceeded {
+		log.Warn().
+			Str("instance", instanceName).
+			Int("freshlyPolled", len(polledGuestKeys)).
+			Int("carriedForward", carriedForward).
+			Msg("Guest snapshot polling timed out before completion; merged fresh results with previously-known snapshots for unpolled guests")
+	} else if carriedForward > 0 {
+		log.Debug().
+			Str("instance", instanceName).
+			Int("carriedForward", carriedForward).
+			Msg("Guest snapshot polling completed; carried forward previous snapshots for guests with per-call errors")
+	}
+
+	if len(allSnapshots) > 0 && !deadlineExceeded {
 		sizeMap := m.collectSnapshotSizes(snapshotCtx, instanceName, client, allSnapshots)
 		if len(sizeMap) > 0 {
 			for i := range allSnapshots {

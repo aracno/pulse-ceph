@@ -89,3 +89,65 @@ func TestMonitor_PollGuestSnapshots_Coverage(t *testing.T) {
 
 	// Should log warn and return (no change to state, but coverage of check)
 }
+
+// TestMonitor_PollGuestSnapshots_PreservesPreviousOnPerVMError guards against
+// #1437: when a per-VM snapshot fetch fails (transient timeout/error), the
+// previously-known snapshots for that VM must be carried forward so they
+// do not silently disappear. Successfully-polled VMs in the same cycle
+// still get their fresh snapshots, so newly-created snapshots show up.
+func TestMonitor_PollGuestSnapshots_PreservesPreviousOnPerVMError(t *testing.T) {
+	m := &Monitor{state: models.NewState()}
+
+	vms := []models.VM{
+		{ID: "qemu/100", VMID: 100, Node: "node1", Instance: "pve1", Name: "vm100", Template: false},
+		{ID: "qemu/999", VMID: 999, Node: "node1", Instance: "pve1", Name: "vm999-fail", Template: false},
+	}
+	m.state.UpdateVMsForInstance("pve1", vms)
+
+	// Seed previous state: vm100 has snap_old; vm999 has snap_persisted that
+	// must survive a transient fetch failure.
+	previous := []models.GuestSnapshot{
+		{ID: "pve1-node1-100-snap_old", Name: "snap_old", Node: "node1", Instance: "pve1", Type: "qemu", VMID: 100, Time: time.Unix(1000, 0)},
+		{ID: "pve1-node1-999-snap_persisted", Name: "snap_persisted", Node: "node1", Instance: "pve1", Type: "qemu", VMID: 999, Time: time.Unix(2000, 0)},
+	}
+	m.state.UpdateGuestSnapshotsForInstance("pve1", previous)
+
+	// Fresh poll: vm100 succeeds with a NEW snapshot, vm999 fails.
+	client := &mockPVEClientSnapshots{
+		snapshots: []proxmox.Snapshot{
+			{Name: "snap_new", SnapTime: 3000, Description: "fresh"},
+		},
+	}
+
+	m.pollGuestSnapshots(context.Background(), "pve1", client)
+
+	got := m.state.GetSnapshot().PVEBackups.GuestSnapshots
+	byName := make(map[string]models.GuestSnapshot, len(got))
+	for _, snap := range got {
+		byName[snap.Name] = snap
+	}
+
+	// vm100's old snapshot must be replaced by the fresh one.
+	if _, oldStillThere := byName["snap_old"]; oldStillThere {
+		t.Errorf("expected snap_old (vm100) to be replaced by fresh poll, but it persisted")
+	}
+	if _, freshHere := byName["snap_new"]; !freshHere {
+		t.Errorf("expected snap_new (vm100) from fresh poll, got names=%v", keys(byName))
+	}
+
+	// vm999's snapshot must be carried forward from previous state because
+	// the fetch failed this cycle. Without the carry-forward fix, this
+	// snapshot would disappear and the user would think their snapshot
+	// was deleted (#1437).
+	if _, persisted := byName["snap_persisted"]; !persisted {
+		t.Errorf("expected snap_persisted (vm999) to be carried forward after fetch failure, got names=%v", keys(byName))
+	}
+}
+
+func keys[K comparable, V any](m map[K]V) []K {
+	out := make([]K, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
