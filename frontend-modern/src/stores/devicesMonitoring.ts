@@ -10,6 +10,7 @@ export interface DeviceAccount {
   enabled: boolean;
   intervalSeconds: number;
   host?: string;
+  apiProfile?: string;
   apiKey?: string;
   apiKeyHint?: string;
   siteFilter?: string;

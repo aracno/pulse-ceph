@@ -272,6 +272,33 @@ type SettingsTab =
 
 type AgentKey = 'pve' | 'pbs' | 'pmg';
 
+const UNIFI_API_PROFILES = [
+  {
+    id: 'site-manager-v1-devices',
+    label: 'Site Manager API Official - List Devices',
+    baseUrl: 'https://api.ui.com',
+    endpoint: '/v1/devices',
+  },
+  {
+    id: 'site-manager-v1-sites',
+    label: 'Site Manager API Official - List Sites',
+    baseUrl: 'https://api.ui.com',
+    endpoint: '/v1/sites',
+  },
+  {
+    id: 'site-manager-v1-hosts',
+    label: 'Site Manager API Official - List Hosts',
+    baseUrl: 'https://api.ui.com',
+    endpoint: '/v1/hosts',
+  },
+  {
+    id: 'site-manager-ea-isp-5m',
+    label: 'Site Manager API EA - ISP metrics 5m',
+    baseUrl: 'https://api.ui.com',
+    endpoint: '/ea/isp-metrics/5m',
+  },
+];
+
 const SETTINGS_HEADER_META: Record<SettingsTab, { title: string; description: string }> = {
   proxmox: {
     title: 'Proxmox',
@@ -637,17 +664,26 @@ const Settings: Component<SettingsProps> = (props) => {
   const [newDeviceAccountType, setNewDeviceAccountType] = createSignal<DeviceAccountType>('ping');
   const [newDeviceAccountName, setNewDeviceAccountName] = createSignal('');
   const [newDeviceAccountHost, setNewDeviceAccountHost] = createSignal('');
+  const [newDeviceAccountApiProfile, setNewDeviceAccountApiProfile] = createSignal(UNIFI_API_PROFILES[0].id);
   const [newDeviceAccountSecret, setNewDeviceAccountSecret] = createSignal('');
   const [newDeviceAccountSiteFilter, setNewDeviceAccountSiteFilter] = createSignal('');
   const [newDeviceAccountInterval, setNewDeviceAccountInterval] = createSignal(60);
   const [newDeviceAccountNotes, setNewDeviceAccountNotes] = createSignal('');
+  const [editingDeviceCheckId, setEditingDeviceCheckId] = createSignal<string | null>(null);
 
   const addDeviceAccount = () => {
     const type = newDeviceAccountType();
-    const account = devicesMonitoringStore.addAccount({
+    const selectedProfile = UNIFI_API_PROFILES.find((profile) => profile.id === newDeviceAccountApiProfile());
+    const patch = {
       type,
       name: newDeviceAccountName().trim() || undefined,
-      host: newDeviceAccountHost().trim() || undefined,
+      host:
+        type === 'ping'
+          ? undefined
+          : type === 'unifi'
+            ? selectedProfile?.baseUrl || 'https://api.ui.com'
+            : newDeviceAccountHost().trim() || undefined,
+      apiProfile: type === 'unifi' ? newDeviceAccountApiProfile() : undefined,
       intervalSeconds: newDeviceAccountInterval(),
       apiKey: type === 'unifi' ? newDeviceAccountSecret().trim() : undefined,
       credential: type === 'snmp' ? newDeviceAccountSecret().trim() : undefined,
@@ -655,13 +691,50 @@ const Settings: Component<SettingsProps> = (props) => {
       communityHint: type === 'snmp' ? newDeviceAccountSecret().trim().slice(-4) : undefined,
       siteFilter: type === 'unifi' ? newDeviceAccountSiteFilter().trim() : undefined,
       notes: newDeviceAccountNotes().trim() || undefined,
-    });
+    };
+
+    const editingId = editingDeviceCheckId();
+    if (editingId) {
+      devicesMonitoringStore.updateAccount(editingId, patch);
+      notificationStore.success(`${patch.name || 'Device'} check updated`, 2000);
+    } else {
+      const account = devicesMonitoringStore.addAccount(patch);
+      notificationStore.success(`${account.name} check added`, 2000);
+    }
+
     setNewDeviceAccountName('');
     setNewDeviceAccountHost('');
+    setNewDeviceAccountApiProfile(UNIFI_API_PROFILES[0].id);
     setNewDeviceAccountSecret('');
     setNewDeviceAccountSiteFilter('');
     setNewDeviceAccountNotes('');
-    notificationStore.success(`${account.name} check added`, 2000);
+    setEditingDeviceCheckId(null);
+  };
+
+  const editDeviceCheck = (id: string) => {
+    const check = devicesMonitoringStore.accounts().find((item) => item.id === id);
+    if (!check) return;
+    setEditingDeviceCheckId(check.id);
+    setNewDeviceAccountType(check.type);
+    setNewDeviceAccountName(check.name);
+    setNewDeviceAccountHost(check.host || '');
+    setNewDeviceAccountApiProfile(check.apiProfile || UNIFI_API_PROFILES[0].id);
+    setNewDeviceAccountSecret(check.apiKey || check.credential || '');
+    setNewDeviceAccountSiteFilter(check.siteFilter || '');
+    setNewDeviceAccountInterval(check.intervalSeconds);
+    setNewDeviceAccountNotes(check.notes || '');
+  };
+
+  const cancelEditDeviceCheck = () => {
+    setEditingDeviceCheckId(null);
+    setNewDeviceAccountType('ping');
+    setNewDeviceAccountName('');
+    setNewDeviceAccountHost('');
+    setNewDeviceAccountApiProfile(UNIFI_API_PROFILES[0].id);
+    setNewDeviceAccountSecret('');
+    setNewDeviceAccountSiteFilter('');
+    setNewDeviceAccountInterval(60);
+    setNewDeviceAccountNotes('');
   };
 
   const temperatureMonitoringLocked = () =>
@@ -3377,6 +3450,7 @@ const Settings: Component<SettingsProps> = (props) => {
                           <select
                             class={controlClass()}
                             value={newDeviceAccountType()}
+                            disabled={Boolean(editingDeviceCheckId())}
                             onChange={(event) => {
                               const type = event.currentTarget.value as DeviceAccountType;
                               setNewDeviceAccountType(type);
@@ -3403,23 +3477,52 @@ const Settings: Component<SettingsProps> = (props) => {
                             }
                           />
                         </label>
-                        <label class={formField}>
-                          <span class={labelClass()}>
-                            {newDeviceAccountType() === 'unifi' ? 'API endpoint' : 'Default target'}
-                          </span>
-                          <input
-                            class={controlClass()}
-                            value={newDeviceAccountHost()}
-                            onInput={(event) => setNewDeviceAccountHost(event.currentTarget.value)}
-                            placeholder={
-                              newDeviceAccountType() === 'unifi'
-                                ? 'https://api.ui.com'
-                                : newDeviceAccountType() === 'snmp'
-                                  ? '192.168.1.0/24'
-                                  : '192.168.1.1'
-                            }
-                          />
-                        </label>
+                        <Show
+                          when={newDeviceAccountType() === 'unifi'}
+                          fallback={
+                            <Show
+                              when={newDeviceAccountType() === 'snmp'}
+                              fallback={
+                                <div class={formField}>
+                                  <span class={labelClass()}>Target scope</span>
+                                  <div class="rounded-md border border-dashed border-gray-300 px-3 py-2 text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
+                                    Per-device address
+                                  </div>
+                                </div>
+                              }
+                            >
+                              <label class={formField}>
+                                <span class={labelClass()}>Default target scope</span>
+                                <input
+                                  class={controlClass()}
+                                  value={newDeviceAccountHost()}
+                                  onInput={(event) => setNewDeviceAccountHost(event.currentTarget.value)}
+                                  placeholder="192.168.1.0/24"
+                                />
+                              </label>
+                            </Show>
+                          }
+                        >
+                          <label class={formField}>
+                            <span class={labelClass()}>Official API profile</span>
+                            <select
+                              class={controlClass()}
+                              value={newDeviceAccountApiProfile()}
+                              onChange={(event) => setNewDeviceAccountApiProfile(event.currentTarget.value)}
+                            >
+                              <For each={UNIFI_API_PROFILES}>
+                                {(profile) => (
+                                  <option value={profile.id}>
+                                    {profile.label} ({profile.endpoint})
+                                  </option>
+                                )}
+                              </For>
+                            </select>
+                            <span class={formHelpText}>
+                              Base URL: {UNIFI_API_PROFILES.find((profile) => profile.id === newDeviceAccountApiProfile())?.baseUrl}
+                            </span>
+                          </label>
+                        </Show>
                         <label class={formField}>
                           <span class={labelClass()}>Interval</span>
                           <select
@@ -3484,8 +3587,17 @@ const Settings: Component<SettingsProps> = (props) => {
                           onClick={addDeviceAccount}
                           class="inline-flex h-9 items-center rounded-md bg-blue-600 px-3 text-sm font-medium text-white transition-colors hover:bg-blue-700"
                         >
-                          Add check
+                          {editingDeviceCheckId() ? 'Save check' : 'Add check'}
                         </button>
+                        <Show when={editingDeviceCheckId()}>
+                          <button
+                            type="button"
+                            onClick={cancelEditDeviceCheck}
+                            class="ml-2 inline-flex h-9 items-center rounded-md border border-gray-300 px-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-700"
+                          >
+                            Cancel
+                          </button>
+                        </Show>
                       </div>
                     </div>
 
@@ -3525,6 +3637,13 @@ const Settings: Component<SettingsProps> = (props) => {
                                 ariaLabel={`Toggle ${account.name}`}
                                 size="sm"
                               />
+                              <button
+                                type="button"
+                                onClick={() => editDeviceCheck(account.id)}
+                                class="rounded px-2 py-1 text-xs text-blue-600 transition-colors hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-900/20"
+                              >
+                                Edit
+                              </button>
                               <button
                                 type="button"
                                 disabled={account.id === 'account-ping-default'}
