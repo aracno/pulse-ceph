@@ -3659,22 +3659,8 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
                           <div class="border-b border-gray-200 bg-white px-4 py-3 dark:border-gray-700 dark:bg-gray-900/70">
                             <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                               <div class="min-w-0">
-                                <div class="flex flex-wrap items-center gap-3">
-                                  <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                                    {cluster.name || cluster.instance || 'Ceph'}
-                                  </div>
-                                  <Toggle
-                                    size="sm"
-                                    checked={!clusterDisabled()}
-                                    disabled={props.disableAllCeph()}
-                                    onToggle={() => toggleDisabled(cluster.id)}
-                                    title={
-                                      clusterDisabled()
-                                        ? 'Enable all alerts for this Ceph cluster'
-                                        : 'Disable all alerts for this Ceph cluster'
-                                    }
-                                    ariaLabel="Toggle all Ceph cluster alerts"
-                                  />
+                                <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                                  {cluster.name || cluster.instance || 'Ceph'}
                                 </div>
                                 <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
                                   <span class="rounded border border-gray-200 bg-gray-50 px-2 py-0.5 font-medium text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
@@ -3685,11 +3671,25 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
                                   <span>{cluster.inconsistentPGs ?? 0} inconsistent PG</span>
                                 </div>
                               </div>
-                              <Show when={clusterDisabled()}>
-                                <span class="inline-flex w-fit items-center rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200">
-                                  Alerts disabled
-                                </span>
-                              </Show>
+                              <div class="flex shrink-0 items-center justify-end gap-3 md:ml-auto">
+                                <Show when={clusterDisabled()}>
+                                  <span class="inline-flex w-fit items-center rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-200">
+                                    Alerts disabled
+                                  </span>
+                                </Show>
+                                <Toggle
+                                  size="sm"
+                                  checked={!clusterDisabled()}
+                                  disabled={props.disableAllCeph()}
+                                  onToggle={() => toggleDisabled(cluster.id)}
+                                  title={
+                                    clusterDisabled()
+                                      ? 'Enable all alerts for this Ceph cluster'
+                                      : 'Disable all alerts for this Ceph cluster'
+                                  }
+                                  ariaLabel="Toggle all Ceph cluster alerts"
+                                />
+                              </div>
                             </div>
                           </div>
 

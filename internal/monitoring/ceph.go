@@ -290,6 +290,7 @@ func enrichCephClusterOSDsFromNodes(ctx context.Context, client PVEClientInterfa
 	for _, osd := range cluster.OSDs {
 		byID[osd.ID] = osd
 	}
+	ensureCephOSDPlaceholders(cluster, byID)
 
 	for _, node := range nodes {
 		if strings.TrimSpace(node.Node) == "" {
@@ -341,6 +342,26 @@ func enrichCephClusterOSDsFromNodes(ctx context.Context, client PVEClientInterfa
 		return enriched[i].ID < enriched[j].ID
 	})
 	cluster.OSDs = enriched
+}
+
+func ensureCephOSDPlaceholders(cluster *models.CephCluster, osds map[int]models.CephOSD) {
+	if cluster == nil || cluster.NumOSDs <= 0 {
+		return
+	}
+	allUp := cluster.NumOSDsUp == cluster.NumOSDs
+	allIn := cluster.NumOSDsIn == cluster.NumOSDs
+	for id := 0; id < cluster.NumOSDs; id++ {
+		if _, exists := osds[id]; exists {
+			continue
+		}
+		osds[id] = models.CephOSD{
+			ID:        id,
+			Name:      fmt.Sprintf("osd.%d", id),
+			Up:        allUp,
+			In:        allIn,
+			Synthetic: true,
+		}
+	}
 }
 
 func enrichCephClusterOSDsFromMetadata(ctx context.Context, client cephNodeOSDMetadataClient, nodes []proxmox.Node, osds map[int]models.CephOSD) {
