@@ -10,10 +10,12 @@ export interface DeviceAccount {
   enabled: boolean;
   intervalSeconds: number;
   host?: string;
+  apiKey?: string;
   apiKeyHint?: string;
   siteFilter?: string;
   snmpVersion?: 'v2c' | 'v3';
   communityHint?: string;
+  credential?: string;
   username?: string;
   authProtocol?: 'none' | 'md5' | 'sha';
   privacyProtocol?: 'none' | 'des' | 'aes';
@@ -41,6 +43,7 @@ export interface DeviceInventoryItem {
   uptime?: string;
   firmwareVersion?: string;
   lastSeen?: string;
+  lastCheckedAt?: string;
   notes?: string;
 }
 
@@ -168,9 +171,13 @@ export const devicesMonitoringStore = {
       id: makeId('device'),
       status: input.status ?? 'unknown',
       lastSeen: nowIso(),
+      lastCheckedAt: undefined,
     };
     saveDevices([...devices(), item]);
     return item;
+  },
+  updateDevice(id: string, patch: Partial<DeviceInventoryItem>) {
+    saveDevices(devices().map((device) => (device.id === id ? { ...device, ...patch } : device)));
   },
   removeDevice(id: string) {
     saveDevices(devices().filter((device) => device.id !== id));
@@ -179,18 +186,33 @@ export const devicesMonitoringStore = {
     saveDevices(
       devices().map((device) => {
         if (device.id !== id) return device;
-        const latency = device.accountType === 'ping' ? 4 + Math.round(Math.random() * 18) : device.latencyMs;
+        const account = accounts().find((item) => item.id === device.accountId);
+        if (!account?.enabled) return device;
+        const latency = 4 + Math.round(Math.random() * (device.accountType === 'ping' ? 24 : 14));
+        const warning = Math.random() > 0.92;
         return {
           ...device,
-          status: 'online',
+          status: warning ? 'warning' : 'online',
           latencyMs: latency,
-          packetLoss: 0,
+          packetLoss: warning ? 1 : 0,
           cpuUsage: device.accountType === 'ping' ? undefined : 8 + Math.round(Math.random() * 42),
           memoryUsage: device.accountType === 'ping' ? undefined : 18 + Math.round(Math.random() * 52),
           uptime: device.uptime || 'just now',
           lastSeen: nowIso(),
+          lastCheckedAt: nowIso(),
         };
       }),
     );
+  },
+  pollDueDevices() {
+    const now = Date.now();
+    devices().forEach((device) => {
+      const account = accounts().find((item) => item.id === device.accountId);
+      if (!account?.enabled) return;
+      const last = device.lastCheckedAt ? new Date(device.lastCheckedAt).getTime() : 0;
+      if (now - last >= account.intervalSeconds * 1000) {
+        this.simulatePoll(device.id);
+      }
+    });
   },
 };

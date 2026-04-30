@@ -1,4 +1,4 @@
-import { Component, For, JSX, Show, createMemo, createSignal } from 'solid-js';
+import { Component, For, JSX, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
 import {
   devicesMonitoringStore,
@@ -63,6 +63,67 @@ const formatLastSeen = (value?: string) => {
   return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 };
 
+interface UnifiDeviceResult {
+  id: string;
+  name: string;
+  host: string;
+  type: DeviceInventoryItem['type'];
+  vendor: string;
+  model?: string;
+  site?: string;
+  firmwareVersion?: string;
+  status?: string;
+  raw: Record<string, unknown>;
+}
+
+const asString = (...values: unknown[]) => {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number') return String(value);
+  }
+  return '';
+};
+
+const mapUnifiType = (rawType: string): DeviceInventoryItem['type'] => {
+  const normalized = rawType.toLowerCase();
+  if (normalized.includes('switch') || normalized === 'usw') return 'switch';
+  if (normalized.includes('gateway') || normalized.includes('router') || normalized === 'ugw') return 'gateway';
+  if (normalized.includes('access') || normalized.includes('ap') || normalized === 'uap') return 'access_point';
+  if (normalized.includes('console') || normalized.includes('cloud')) return 'controller';
+  return 'other';
+};
+
+const normalizeUnifiDevices = (payload: unknown): UnifiDeviceResult[] => {
+  const root = payload as { data?: unknown; devices?: unknown };
+  const list = Array.isArray(root?.data)
+    ? root.data
+    : Array.isArray(root?.devices)
+      ? root.devices
+      : Array.isArray(payload)
+        ? payload
+        : [];
+
+  return list
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .map((item, index) => {
+      const site = item.site && typeof item.site === 'object' ? (item.site as Record<string, unknown>) : undefined;
+      const type = asString(item.type, item.category, item.deviceType, item.productLine);
+      const host = asString(item.ipAddress, item.ip, item.host, item.mac, item.id, item._id);
+      return {
+        id: asString(item.id, item._id, item.mac, host, index),
+        name: asString(item.name, item.displayName, item.hostname, item.alias, item.mac, `UniFi device ${index + 1}`),
+        host,
+        type: mapUnifiType(type),
+        vendor: 'Ubiquiti',
+        model: asString(item.model, item.modelName, item.shortname, item.productName),
+        site: asString(item.siteName, item.siteId, site?.name, site?.id),
+        firmwareVersion: asString(item.version, item.firmwareVersion, item.firmware),
+        status: asString(item.status, item.state, item.online),
+        raw: item,
+      };
+    });
+};
+
 export const Devices: Component = () => {
   const navigate = useNavigate();
   const [wizardOpen, setWizardOpen] = createSignal(false);
@@ -75,6 +136,9 @@ export const Devices: Component = () => {
   const [deviceModel, setDeviceModel] = createSignal('');
   const [deviceSite, setDeviceSite] = createSignal('');
   const [deviceNotes, setDeviceNotes] = createSignal('');
+  const [unifiLoading, setUnifiLoading] = createSignal(false);
+  const [unifiError, setUnifiError] = createSignal('');
+  const [unifiDevices, setUnifiDevices] = createSignal<UnifiDeviceResult[]>([]);
 
   const accounts = createMemo(() => devicesMonitoringStore.accounts().filter((account) => account.enabled));
   const devices = devicesMonitoringStore.devices;
@@ -104,6 +168,9 @@ export const Devices: Component = () => {
     setDeviceModel('');
     setDeviceSite('');
     setDeviceNotes('');
+    setUnifiLoading(false);
+    setUnifiError('');
+    setUnifiDevices([]);
   };
 
   const openWizard = () => {
@@ -128,6 +195,108 @@ export const Devices: Component = () => {
     devicesMonitoringStore.simulatePoll(created.id);
     setWizardOpen(false);
   };
+
+  const fetchUnifiDevices = async (accountId = selectedAccountId()) => {
+    const account = devicesMonitoringStore.accounts().find((item) => item.id === accountId);
+    if (!account || account.type !== 'unifi') return [];
+    if (!account.apiKey) {
+      setUnifiError('This UniFi check has no API key. Add or update the check in Settings first.');
+      return [];
+    }
+
+    setUnifiLoading(true);
+    setUnifiError('');
+    try {
+      const baseUrl = (account.host || 'https://api.ui.com').replace(/\/+$/, '');
+      const response = await fetch(`${baseUrl}/v1/devices`, {
+        headers: {
+          Accept: 'application/json',
+          'X-API-Key': account.apiKey,
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`UniFi API returned HTTP ${response.status}`);
+      }
+      const payload = await response.json();
+      const devices = normalizeUnifiDevices(payload);
+      setUnifiDevices(devices);
+      if (devices.length === 0) {
+        setUnifiError('The UniFi API answered, but no devices were returned for this key.');
+      }
+      return devices;
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Unable to query UniFi Site Manager API from this browser session.';
+      setUnifiError(`${message}. If this is a CORS/network error, the backend proxy collector will be required.`);
+      return [];
+    } finally {
+      setUnifiLoading(false);
+    }
+  };
+
+  const selectUnifiDevice = (device: UnifiDeviceResult) => {
+    setDeviceName(device.name);
+    setDeviceHost(device.host || device.id);
+    setDeviceType(device.type);
+    setDeviceVendor(device.vendor);
+    setDeviceModel(device.model || '');
+    setDeviceSite(device.site || '');
+    setDeviceNotes(device.firmwareVersion ? `Firmware ${device.firmwareVersion}` : '');
+  };
+
+  const runScheduledChecks = async () => {
+    const now = Date.now();
+    const checksById = new Map(devicesMonitoringStore.accounts().map((check) => [check.id, check]));
+    const uniFiCache = new Map<string, UnifiDeviceResult[]>();
+
+    for (const device of devices()) {
+      const check = checksById.get(device.accountId);
+      if (!check?.enabled) continue;
+      const last = device.lastCheckedAt ? new Date(device.lastCheckedAt).getTime() : 0;
+      if (now - last < check.intervalSeconds * 1000) continue;
+
+      if (check.type === 'unifi' && check.apiKey) {
+        let discovered = uniFiCache.get(check.id);
+        if (!discovered) {
+          discovered = await fetchUnifiDevices(check.id);
+          uniFiCache.set(check.id, discovered);
+        }
+        const match = discovered.find(
+          (item) =>
+            item.id === device.host ||
+            item.host === device.host ||
+            item.name.toLowerCase() === device.name.toLowerCase(),
+        );
+        if (match) {
+          devicesMonitoringStore.updateDevice(device.id, {
+            status: String(match.status || '').toLowerCase().includes('offline') ? 'offline' : 'online',
+            model: match.model || device.model,
+            site: match.site || device.site,
+            firmwareVersion: match.firmwareVersion || device.firmwareVersion,
+            lastSeen: new Date().toISOString(),
+            lastCheckedAt: new Date().toISOString(),
+          });
+        } else {
+          devicesMonitoringStore.updateDevice(device.id, {
+            status: 'warning',
+            lastCheckedAt: new Date().toISOString(),
+          });
+        }
+      } else {
+        devicesMonitoringStore.simulatePoll(device.id);
+      }
+    }
+  };
+
+  onMount(() => {
+    void runScheduledChecks();
+    const interval = window.setInterval(() => {
+      void runScheduledChecks();
+    }, 5000);
+    onCleanup(() => window.clearInterval(interval));
+  });
 
   return (
     <div class="space-y-6">
@@ -158,7 +327,7 @@ export const Devices: Component = () => {
             class="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
           >
             <Settings class="h-4 w-4" strokeWidth={2} />
-            Accounts
+            Checks
           </button>
         </div>
       </div>
@@ -177,7 +346,7 @@ export const Devices: Component = () => {
               <div>
                 <h2 class="text-sm font-semibold uppercase tracking-normal text-gray-500 dark:text-gray-400">Inventory</h2>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Devices added through the wizard. Data cards adapt to Ping, UniFi, and SNMP sources.
+                  Devices added through the wizard. State updates follow each check frequency.
                 </p>
               </div>
               <div class="text-xs text-gray-500 dark:text-gray-400">{devices().length} devices</div>
@@ -298,9 +467,9 @@ export const Devices: Component = () => {
               <Show when={wizardStep() === 1}>
                 <div class="space-y-4">
                   <div>
-                    <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Select monitoring account</h3>
+                    <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Select monitoring check</h3>
                     <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                      Accounts come from Settings - Platforms - Devices.
+                      Checks come from Settings - Platforms - Devices.
                     </p>
                   </div>
                   <div class="grid gap-3">
@@ -335,7 +504,56 @@ export const Devices: Component = () => {
               </Show>
 
               <Show when={wizardStep() === 2}>
-                <div class="grid gap-4 sm:grid-cols-2">
+                <div class="space-y-4">
+                  <Show when={selectedAccount()?.type === 'unifi'}>
+                    <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900/60 dark:bg-blue-900/20">
+                      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div class="text-sm font-semibold text-blue-900 dark:text-blue-100">UniFi API discovery</div>
+                          <div class="mt-1 text-xs text-blue-800 dark:text-blue-200">
+                            Query `GET /v1/devices` with the selected UniFi check and select a returned device.
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void fetchUnifiDevices()}
+                          disabled={unifiLoading()}
+                          class="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-wait disabled:bg-blue-400"
+                        >
+                          {unifiLoading() ? 'Querying...' : 'Fetch UniFi devices'}
+                        </button>
+                      </div>
+                      <Show when={unifiError()}>
+                        <div class="mt-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-200">
+                          {unifiError()}
+                        </div>
+                      </Show>
+                      <Show when={unifiDevices().length > 0}>
+                        <div class="mt-3 max-h-56 overflow-y-auto rounded border border-blue-200 bg-white dark:border-blue-900/60 dark:bg-gray-900">
+                          <For each={unifiDevices()}>
+                            {(device) => (
+                              <button
+                                type="button"
+                                onClick={() => selectUnifiDevice(device)}
+                                class="flex w-full items-center justify-between gap-3 border-b border-gray-200 px-3 py-2 text-left last:border-b-0 hover:bg-blue-50 dark:border-gray-700 dark:hover:bg-blue-900/20"
+                              >
+                                <span>
+                                  <span class="block text-sm font-medium text-gray-900 dark:text-gray-100">{device.name}</span>
+                                  <span class="block text-xs text-gray-500 dark:text-gray-400">
+                                    {[device.model, device.host, device.site].filter(Boolean).join(' - ')}
+                                  </span>
+                                </span>
+                                <span class="rounded bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                                  Select
+                                </span>
+                              </button>
+                            )}
+                          </For>
+                        </div>
+                      </Show>
+                    </div>
+                  </Show>
+                  <div class="grid gap-4 sm:grid-cols-2">
                   <label class="flex flex-col gap-1">
                     <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Name</span>
                     <input class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900" value={deviceName()} onInput={(event) => setDeviceName(event.currentTarget.value)} placeholder="Core switch" />
@@ -372,6 +590,7 @@ export const Devices: Component = () => {
                     <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Notes</span>
                     <input class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-900" value={deviceNotes()} onInput={(event) => setDeviceNotes(event.currentTarget.value)} placeholder="Rack, room, uplink, provider..." />
                   </label>
+                  </div>
                 </div>
               </Show>
             </div>
@@ -440,7 +659,7 @@ const EmptyInventory: Component<{ onAdd: () => void }> = (props) => (
     </div>
     <h3 class="mt-4 text-sm font-semibold text-gray-900 dark:text-gray-100">No network devices yet</h3>
     <p class="mx-auto mt-2 max-w-xl text-sm text-gray-500 dark:text-gray-400">
-      Add a device and attach it to a Ping, UniFi, or SNMP account.
+      Add a device and attach it to a Ping, UniFi, or SNMP check.
     </p>
     <button
       type="button"

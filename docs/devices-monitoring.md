@@ -15,18 +15,22 @@ Docker remains supported internally by agents and backend data paths, but Docker
 
 The UI is organized around two concepts:
 
-- Monitoring accounts in `Settings -> Platforms -> Devices`.
+- Monitoring checks in `Settings -> Platforms -> Devices`.
 - Device inventory in the top-level `Devices` tab.
 
-Accounts describe how data should be collected:
+Checks describe how data should be collected:
 
-- `Ping`: default baseline account for reachability, latency, and packet loss.
-- `UniFi`: one or more UniFi Site Manager API accounts.
-- `SNMP`: one or more SNMP accounts for managed network hardware.
+- `Ping`: default baseline check for reachability, latency, and packet loss.
+- `UniFi`: one or more UniFi Site Manager API checks.
+- `SNMP`: one or more SNMP checks for managed network hardware.
 
-The `Devices` tab contains an `Add device` wizard. The wizard first selects one configured account, then captures device identity and address details. Added devices are shown in the Devices inventory with source-aware health cards.
+The `Devices` tab contains an `Add device` wizard. The wizard first selects one configured check, then captures device identity and address details. Added devices are shown in the Devices inventory with source-aware health cards.
 
-The current UI persists this draft configuration in browser local storage so the workflow is usable while the backend collector is being built. Production polling should move account storage to the backend secret store before real credentials are used.
+For UniFi checks, the wizard can query the official Site Manager API endpoint `GET https://api.ui.com/v1/devices` using the configured `X-API-Key`, then use the returned device list to prefill identity, model, site, and address fields.
+
+Device state is refreshed automatically from the selected check interval. Ping and SNMP checks currently use a browser-side state simulation until backend collectors exist. UniFi checks use the real Site Manager device list when an API key is present, with a warning state if a configured device is no longer returned.
+
+The current UI persists this draft configuration in browser local storage so the workflow is usable while the backend collector is being built. Production polling should move check storage to the backend secret store before real credentials are used.
 
 ## Collection Strategy
 

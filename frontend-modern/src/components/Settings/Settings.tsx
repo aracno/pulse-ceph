@@ -649,6 +649,8 @@ const Settings: Component<SettingsProps> = (props) => {
       name: newDeviceAccountName().trim() || undefined,
       host: newDeviceAccountHost().trim() || undefined,
       intervalSeconds: newDeviceAccountInterval(),
+      apiKey: type === 'unifi' ? newDeviceAccountSecret().trim() : undefined,
+      credential: type === 'snmp' ? newDeviceAccountSecret().trim() : undefined,
       apiKeyHint: type === 'unifi' ? newDeviceAccountSecret().trim().slice(-6) : undefined,
       communityHint: type === 'snmp' ? newDeviceAccountSecret().trim().slice(-4) : undefined,
       siteFilter: type === 'unifi' ? newDeviceAccountSiteFilter().trim() : undefined,
@@ -659,7 +661,7 @@ const Settings: Component<SettingsProps> = (props) => {
     setNewDeviceAccountSecret('');
     setNewDeviceAccountSiteFilter('');
     setNewDeviceAccountNotes('');
-    notificationStore.success(`${account.name} account added`, 2000);
+    notificationStore.success(`${account.name} check added`, 2000);
   };
 
   const temperatureMonitoringLocked = () =>
@@ -3362,9 +3364,9 @@ const Settings: Component<SettingsProps> = (props) => {
                 <Card padding="lg" class="mb-6">
                   <div class="space-y-6">
                     <div class="space-y-1">
-                      <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Devices Data Sources</h3>
+                      <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Devices Checks</h3>
                       <p class="text-sm text-gray-600 dark:text-gray-400">
-                        Add monitoring accounts used by the Devices wizard. Ping is always available as the default baseline.
+                        Add monitoring checks used by the Devices wizard. Ping is always available as the default baseline.
                       </p>
                     </div>
 
@@ -3387,7 +3389,7 @@ const Settings: Component<SettingsProps> = (props) => {
                           </select>
                         </label>
                         <label class={formField}>
-                          <span class={labelClass()}>Account name</span>
+                          <span class={labelClass()}>Check name</span>
                           <input
                             class={controlClass()}
                             value={newDeviceAccountName()}
@@ -3449,7 +3451,7 @@ const Settings: Component<SettingsProps> = (props) => {
                               autocomplete="off"
                             />
                             <span class={formHelpText}>
-                              Stored as a masked hint in this UI draft; backend secret storage is the next step.
+                              Used by the browser-side check now; backend secret storage is the next step.
                             </span>
                           </label>
                         </Show>
@@ -3482,14 +3484,14 @@ const Settings: Component<SettingsProps> = (props) => {
                           onClick={addDeviceAccount}
                           class="inline-flex h-9 items-center rounded-md bg-blue-600 px-3 text-sm font-medium text-white transition-colors hover:bg-blue-700"
                         >
-                          Add account
+                          Add check
                         </button>
                       </div>
                     </div>
 
                     <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
                       <div class="grid grid-cols-[1fr_120px_120px_120px] bg-gray-50 px-4 py-2 text-xs font-semibold uppercase tracking-normal text-gray-500 dark:bg-gray-900/60 dark:text-gray-400">
-                        <span>Account</span>
+                        <span>Check</span>
                         <span>Source</span>
                         <span>Interval</span>
                         <span class="text-right">Actions</span>
