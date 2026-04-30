@@ -1181,7 +1181,7 @@ function AppLayout(props: {
         route: '/devices',
         settingsRoute: '/settings/devices',
         tooltip: 'Monitor network devices, UniFi gear, routers, switches, and modems',
-        enabled: hasDevices() || !!seenPlatforms()['devices'],
+        enabled: true,
         live: hasDevices(),
         icon: (
           <NetworkIcon class="w-4 h-4 shrink-0" />

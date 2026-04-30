@@ -83,6 +83,7 @@ import type { NodeConfig } from '@/types/nodes';
 import type { UpdateInfo, VersionInfo } from '@/api/updates';
 import type { SecurityStatus as SecurityStatusInfo } from '@/types/config';
 import { eventBus } from '@/stores/events';
+import { devicesMonitoringStore, type DeviceAccountType } from '@/stores/devicesMonitoring';
 
 import { updateStore } from '@/stores/updates';
 import { isPro, loadLicenseStatus } from '@/stores/license';
@@ -633,15 +634,33 @@ const Settings: Component<SettingsProps> = (props) => {
   // Docker update actions control (server-wide setting to hide update buttons)
   const [, setDisableDockerUpdateActions] = createSignal(false);
 
-  // Devices monitoring configuration draft. The collector is intentionally separated by source:
-  // UniFi for rich vendor data, SNMP for generic managed network hardware.
-  const [devicesUnifiEnabled, setDevicesUnifiEnabled] = createSignal(false);
-  const [devicesUnifiApiKey, setDevicesUnifiApiKey] = createSignal('');
-  const [devicesUnifiSiteFilter, setDevicesUnifiSiteFilter] = createSignal('');
-  const [devicesSnmpEnabled, setDevicesSnmpEnabled] = createSignal(false);
-  const [devicesSnmpTargets, setDevicesSnmpTargets] = createSignal('');
-  const [devicesSnmpCommunity, setDevicesSnmpCommunity] = createSignal('');
-  const [devicesPollingSeconds, setDevicesPollingSeconds] = createSignal(60);
+  const [newDeviceAccountType, setNewDeviceAccountType] = createSignal<DeviceAccountType>('ping');
+  const [newDeviceAccountName, setNewDeviceAccountName] = createSignal('');
+  const [newDeviceAccountHost, setNewDeviceAccountHost] = createSignal('');
+  const [newDeviceAccountSecret, setNewDeviceAccountSecret] = createSignal('');
+  const [newDeviceAccountSiteFilter, setNewDeviceAccountSiteFilter] = createSignal('');
+  const [newDeviceAccountInterval, setNewDeviceAccountInterval] = createSignal(60);
+  const [newDeviceAccountNotes, setNewDeviceAccountNotes] = createSignal('');
+
+  const addDeviceAccount = () => {
+    const type = newDeviceAccountType();
+    const account = devicesMonitoringStore.addAccount({
+      type,
+      name: newDeviceAccountName().trim() || undefined,
+      host: newDeviceAccountHost().trim() || undefined,
+      intervalSeconds: newDeviceAccountInterval(),
+      apiKeyHint: type === 'unifi' ? newDeviceAccountSecret().trim().slice(-6) : undefined,
+      communityHint: type === 'snmp' ? newDeviceAccountSecret().trim().slice(-4) : undefined,
+      siteFilter: type === 'unifi' ? newDeviceAccountSiteFilter().trim() : undefined,
+      notes: newDeviceAccountNotes().trim() || undefined,
+    });
+    setNewDeviceAccountName('');
+    setNewDeviceAccountHost('');
+    setNewDeviceAccountSecret('');
+    setNewDeviceAccountSiteFilter('');
+    setNewDeviceAccountNotes('');
+    notificationStore.success(`${account.name} account added`, 2000);
+  };
 
   const temperatureMonitoringLocked = () =>
     Boolean(
@@ -3343,116 +3362,179 @@ const Settings: Component<SettingsProps> = (props) => {
                 <Card padding="lg" class="mb-6">
                   <div class="space-y-6">
                     <div class="space-y-1">
-                      <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Devices Monitoring</h3>
+                      <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">Devices Data Sources</h3>
                       <p class="text-sm text-gray-600 dark:text-gray-400">
-                        Collect basic health indicators from manageable network hardware.
+                        Add monitoring accounts used by the Devices wizard. Ping is always available as the default baseline.
                       </p>
                     </div>
 
-                    <div class="grid gap-4 xl:grid-cols-3">
-                      <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
-                        <div class="flex items-start justify-between gap-4">
-                          <div>
-                            <h4 class="text-sm font-semibold text-gray-900 dark:text-gray-100">UniFi Site Manager API</h4>
-                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                              Preferred source for UniFi consoles, sites, gateways, switches, and access points.
-                            </p>
-                          </div>
-                          <Toggle
-                            checked={devicesUnifiEnabled()}
-                            onChange={(event) => setDevicesUnifiEnabled(event.currentTarget.checked)}
-                            ariaLabel="Enable UniFi device monitoring"
-                            size="sm"
-                          />
-                        </div>
-                        <div class="mt-4 space-y-3">
-                          <label class={formField}>
-                            <span class={labelClass()}>API key</span>
-                            <input
-                              type="password"
-                              class={controlClass()}
-                              value={devicesUnifiApiKey()}
-                              onInput={(event) => setDevicesUnifiApiKey(event.currentTarget.value)}
-                              placeholder="X-API-Key"
-                              autocomplete="off"
-                            />
-                          </label>
-                          <label class={formField}>
-                            <span class={labelClass()}>Site filter</span>
-                            <input
-                              class={controlClass()}
-                              value={devicesUnifiSiteFilter()}
-                              onInput={(event) => setDevicesUnifiSiteFilter(event.currentTarget.value)}
-                              placeholder="All sites"
-                            />
-                            <span class={formHelpText}>Optional comma-separated UniFi site names or IDs.</span>
-                          </label>
-                        </div>
-                      </div>
-
-                      <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
-                        <div class="flex items-start justify-between gap-4">
-                          <div>
-                            <h4 class="text-sm font-semibold text-gray-900 dark:text-gray-100">SNMP</h4>
-                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                              Generic health fallback for managed network equipment outside UniFi.
-                            </p>
-                          </div>
-                          <Toggle
-                            checked={devicesSnmpEnabled()}
-                            onChange={(event) => setDevicesSnmpEnabled(event.currentTarget.checked)}
-                            ariaLabel="Enable SNMP device monitoring"
-                            size="sm"
-                          />
-                        </div>
-                        <div class="mt-4 space-y-3">
-                          <label class={formField}>
-                            <span class={labelClass()}>Targets</span>
-                            <textarea
-                              class={controlClass('min-h-20')}
-                              value={devicesSnmpTargets()}
-                              onInput={(event) => setDevicesSnmpTargets(event.currentTarget.value)}
-                              placeholder="192.168.1.1&#10;192.168.1.0/24"
-                            />
-                            <span class={formHelpText}>One host or CIDR per line.</span>
-                          </label>
-                          <label class={formField}>
-                            <span class={labelClass()}>Community</span>
-                            <input
-                              type="password"
-                              class={controlClass()}
-                              value={devicesSnmpCommunity()}
-                              onInput={(event) => setDevicesSnmpCommunity(event.currentTarget.value)}
-                              placeholder="public"
-                              autocomplete="off"
-                            />
-                          </label>
-                        </div>
-                      </div>
-
-                      <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
-                        <h4 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Polling and Health</h4>
-                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                          Basic checks focus on reachability, CPU, memory, uptime, firmware, and device state.
-                        </p>
-                        <label class={`${formField} mt-4`}>
-                          <span class={labelClass()}>Polling interval</span>
+                    <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
+                      <div class="grid gap-3 lg:grid-cols-[180px_1fr_1fr_140px]">
+                        <label class={formField}>
+                          <span class={labelClass()}>Source</span>
                           <select
                             class={controlClass()}
-                            value={devicesPollingSeconds()}
-                            onChange={(event) => setDevicesPollingSeconds(Number(event.currentTarget.value))}
+                            value={newDeviceAccountType()}
+                            onChange={(event) => {
+                              const type = event.currentTarget.value as DeviceAccountType;
+                              setNewDeviceAccountType(type);
+                              setNewDeviceAccountInterval(type === 'ping' ? 30 : 60);
+                            }}
                           >
+                            <option value="ping">Ping</option>
+                            <option value="unifi">UniFi</option>
+                            <option value="snmp">SNMP</option>
+                          </select>
+                        </label>
+                        <label class={formField}>
+                          <span class={labelClass()}>Account name</span>
+                          <input
+                            class={controlClass()}
+                            value={newDeviceAccountName()}
+                            onInput={(event) => setNewDeviceAccountName(event.currentTarget.value)}
+                            placeholder={
+                              newDeviceAccountType() === 'unifi'
+                                ? 'UniFi Homelab'
+                                : newDeviceAccountType() === 'snmp'
+                                  ? 'Core switches SNMP'
+                                  : 'Fast LAN ping'
+                            }
+                          />
+                        </label>
+                        <label class={formField}>
+                          <span class={labelClass()}>
+                            {newDeviceAccountType() === 'unifi' ? 'API endpoint' : 'Default target'}
+                          </span>
+                          <input
+                            class={controlClass()}
+                            value={newDeviceAccountHost()}
+                            onInput={(event) => setNewDeviceAccountHost(event.currentTarget.value)}
+                            placeholder={
+                              newDeviceAccountType() === 'unifi'
+                                ? 'https://api.ui.com'
+                                : newDeviceAccountType() === 'snmp'
+                                  ? '192.168.1.0/24'
+                                  : '192.168.1.1'
+                            }
+                          />
+                        </label>
+                        <label class={formField}>
+                          <span class={labelClass()}>Interval</span>
+                          <select
+                            class={controlClass()}
+                            value={newDeviceAccountInterval()}
+                            onChange={(event) => setNewDeviceAccountInterval(Number(event.currentTarget.value))}
+                          >
+                            <option value={15}>15 seconds</option>
                             <option value={30}>30 seconds</option>
                             <option value={60}>60 seconds</option>
                             <option value={120}>2 minutes</option>
                             <option value={300}>5 minutes</option>
                           </select>
                         </label>
-                        <div class="mt-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-200">
-                          Configuration storage and collectors are staged behind this UI so credentials can be wired
-                          through the backend secret store before polling is enabled.
-                        </div>
                       </div>
+
+                      <div class="mt-3 grid gap-3 lg:grid-cols-3">
+                        <Show when={newDeviceAccountType() !== 'ping'}>
+                          <label class={formField}>
+                            <span class={labelClass()}>
+                              {newDeviceAccountType() === 'unifi' ? 'API key' : 'Community / password'}
+                            </span>
+                            <input
+                              type="password"
+                              class={controlClass()}
+                              value={newDeviceAccountSecret()}
+                              onInput={(event) => setNewDeviceAccountSecret(event.currentTarget.value)}
+                              placeholder={newDeviceAccountType() === 'unifi' ? 'X-API-Key' : 'public'}
+                              autocomplete="off"
+                            />
+                            <span class={formHelpText}>
+                              Stored as a masked hint in this UI draft; backend secret storage is the next step.
+                            </span>
+                          </label>
+                        </Show>
+                        <Show when={newDeviceAccountType() === 'unifi'}>
+                          <label class={formField}>
+                            <span class={labelClass()}>Site filter</span>
+                            <input
+                              class={controlClass()}
+                              value={newDeviceAccountSiteFilter()}
+                              onInput={(event) => setNewDeviceAccountSiteFilter(event.currentTarget.value)}
+                              placeholder="All sites"
+                            />
+                            <span class={formHelpText}>Optional comma-separated site names or IDs.</span>
+                          </label>
+                        </Show>
+                        <label class={formField}>
+                          <span class={labelClass()}>Notes</span>
+                          <input
+                            class={controlClass()}
+                            value={newDeviceAccountNotes()}
+                            onInput={(event) => setNewDeviceAccountNotes(event.currentTarget.value)}
+                            placeholder="Optional context"
+                          />
+                        </label>
+                      </div>
+
+                      <div class="mt-4 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={addDeviceAccount}
+                          class="inline-flex h-9 items-center rounded-md bg-blue-600 px-3 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+                        >
+                          Add account
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
+                      <div class="grid grid-cols-[1fr_120px_120px_120px] bg-gray-50 px-4 py-2 text-xs font-semibold uppercase tracking-normal text-gray-500 dark:bg-gray-900/60 dark:text-gray-400">
+                        <span>Account</span>
+                        <span>Source</span>
+                        <span>Interval</span>
+                        <span class="text-right">Actions</span>
+                      </div>
+                      <For each={devicesMonitoringStore.accounts()}>
+                        {(account) => (
+                          <div class="grid grid-cols-[1fr_120px_120px_120px] items-center border-t border-gray-200 px-4 py-3 text-sm dark:border-gray-700">
+                            <div class="min-w-0">
+                              <div class="flex items-center gap-2">
+                                <span class="truncate font-medium text-gray-900 dark:text-gray-100">{account.name}</span>
+                                <Show when={account.id === 'account-ping-default'}>
+                                  <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                                    default
+                                  </span>
+                                </Show>
+                              </div>
+                              <div class="truncate text-xs text-gray-500 dark:text-gray-400">
+                                {account.host || account.siteFilter || account.notes || 'No extra scope configured'}
+                              </div>
+                            </div>
+                            <span class="text-gray-700 dark:text-gray-300">{account.type.toUpperCase()}</span>
+                            <span class="text-gray-700 dark:text-gray-300">{account.intervalSeconds}s</span>
+                            <div class="flex justify-end gap-2">
+                              <Toggle
+                                checked={account.enabled}
+                                onChange={(event) =>
+                                  devicesMonitoringStore.updateAccount(account.id, {
+                                    enabled: event.currentTarget.checked,
+                                  })
+                                }
+                                ariaLabel={`Toggle ${account.name}`}
+                                size="sm"
+                              />
+                              <button
+                                type="button"
+                                disabled={account.id === 'account-ping-default'}
+                                onClick={() => devicesMonitoringStore.removeAccount(account.id)}
+                                class="rounded px-2 py-1 text-xs text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:text-gray-400 dark:text-red-300 dark:hover:bg-red-900/20 dark:disabled:text-gray-600"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </For>
                     </div>
                   </div>
                 </Card>
