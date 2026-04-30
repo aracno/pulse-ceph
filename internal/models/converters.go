@@ -848,23 +848,28 @@ func (s Storage) ToFrontend() StorageFrontend {
 // ToFrontend converts a CephCluster to CephClusterFrontend
 func (c CephCluster) ToFrontend() CephClusterFrontend {
 	frontend := CephClusterFrontend{
-		ID:             c.ID,
-		Instance:       c.Instance,
-		Name:           c.Name,
-		FSID:           c.FSID,
-		Health:         c.Health,
-		HealthMessage:  c.HealthMessage,
-		TotalBytes:     c.TotalBytes,
-		UsedBytes:      c.UsedBytes,
-		AvailableBytes: c.AvailableBytes,
-		UsagePercent:   c.UsagePercent,
-		NumMons:        c.NumMons,
-		NumMgrs:        c.NumMgrs,
-		NumOSDs:        c.NumOSDs,
-		NumOSDsUp:      c.NumOSDsUp,
-		NumOSDsIn:      c.NumOSDsIn,
-		NumPGs:         c.NumPGs,
-		LastUpdated:    c.LastUpdated.Unix() * 1000,
+		ID:              c.ID,
+		Instance:        c.Instance,
+		Name:            c.Name,
+		FSID:            c.FSID,
+		Health:          c.Health,
+		HealthMessage:   c.HealthMessage,
+		TotalBytes:      c.TotalBytes,
+		UsedBytes:       c.UsedBytes,
+		AvailableBytes:  c.AvailableBytes,
+		UsagePercent:    c.UsagePercent,
+		NumMons:         c.NumMons,
+		NumMgrs:         c.NumMgrs,
+		NumOSDs:         c.NumOSDs,
+		NumOSDsUp:       c.NumOSDsUp,
+		NumOSDsIn:       c.NumOSDsIn,
+		NumPGs:          c.NumPGs,
+		InconsistentPGs: c.InconsistentPGs,
+		LastUpdated:     c.LastUpdated.Unix() * 1000,
+	}
+
+	if len(c.OSDs) > 0 {
+		frontend.OSDs = append([]CephOSD(nil), c.OSDs...)
 	}
 
 	if len(c.Pools) > 0 {

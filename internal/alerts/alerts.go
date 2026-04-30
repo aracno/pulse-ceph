@@ -198,6 +198,9 @@ type ThresholdConfig struct {
 	Disabled            bool                 `json:"disabled,omitempty"`            // Completely disable alerts for this guest
 	DisableConnectivity bool                 `json:"disableConnectivity,omitempty"` // Disable node offline/connectivity/powered-off alerts
 	PoweredOffSeverity  AlertLevel           `json:"poweredOffSeverity,omitempty"`  // Severity for powered-off alerts
+	CephDisableHealth   bool                 `json:"cephDisableHealth,omitempty"`   // Disable Ceph cluster health alerts
+	CephDisableOSD      bool                 `json:"cephDisableOSD,omitempty"`      // Disable all Ceph OSD state alerts for a cluster
+	CephDisablePG       bool                 `json:"cephDisablePG,omitempty"`       // Disable Ceph inconsistent PG alerts
 	CPU                 *HysteresisThreshold `json:"cpu,omitempty"`
 	Memory              *HysteresisThreshold `json:"memory,omitempty"`
 	Disk                *HysteresisThreshold `json:"disk,omitempty"`
@@ -1557,6 +1560,10 @@ func normalizeOverrides(overrides map[string]ThresholdConfig) {
 			override.Usage = ensureHysteresisThreshold(override.Usage)
 		}
 		normalizedKey := id
+		if strings.Contains(id, ":osd:") {
+			overrides[normalizedKey] = override
+			continue
+		}
 		if ident, ok := parseCanonicalGuestKey(id); ok && ident.instance != ident.node {
 			normalizedKey = stableGuestOverrideKey(ident.instance, ident.node, ident.vmid)
 		}
@@ -5518,6 +5525,12 @@ func (m *Manager) CheckCephCluster(cluster models.CephCluster) {
 	enabled := m.config.Enabled
 	disableAll := m.config.DisableAllCeph
 	override, hasOverride := m.config.Overrides[resourceID]
+	osdOverrides := make(map[string]ThresholdConfig)
+	for key, value := range m.config.Overrides {
+		if strings.HasPrefix(key, resourceID+":osd:") {
+			osdOverrides[key] = value
+		}
+	}
 	m.mu.RUnlock()
 
 	if !enabled {
@@ -5528,8 +5541,23 @@ func (m *Manager) CheckCephCluster(cluster models.CephCluster) {
 		return
 	}
 
-	m.checkCephHealth(cluster, resourceID, resourceName)
-	m.checkCephOSDState(cluster, resourceID, resourceName)
+	if override.CephDisableHealth {
+		m.clearAlert(fmt.Sprintf("%s-ceph-health", resourceID))
+	} else {
+		m.checkCephHealth(cluster, resourceID, resourceName)
+	}
+
+	if override.CephDisableOSD {
+		m.clearCephOSDAlerts(resourceID)
+	} else {
+		m.checkCephOSDState(cluster, resourceID, resourceName, osdOverrides)
+	}
+
+	if override.CephDisablePG {
+		m.clearAlert(fmt.Sprintf("%s-ceph-pg-inconsistent", resourceID))
+	} else {
+		m.checkCephPGInconsistent(cluster, resourceID, resourceName)
+	}
 }
 
 func (m *Manager) checkCephHealth(cluster models.CephCluster, resourceID, resourceName string) {
@@ -5578,7 +5606,26 @@ func (m *Manager) checkCephHealth(cluster models.CephCluster, resourceID, resour
 	})
 }
 
-func (m *Manager) checkCephOSDState(cluster models.CephCluster, resourceID, resourceName string) {
+func (m *Manager) checkCephOSDState(cluster models.CephCluster, resourceID, resourceName string, osdOverrides map[string]ThresholdConfig) {
+	if len(cluster.OSDs) > 0 {
+		m.clearAlert(fmt.Sprintf("%s-ceph-osd-state", resourceID))
+		validAlertIDs := make(map[string]struct{}, len(cluster.OSDs))
+		for _, osd := range cluster.OSDs {
+			osdResourceID := cephOSDResourceID(resourceID, osd.ID)
+			alertID := fmt.Sprintf("%s-state", osdResourceID)
+			validAlertIDs[alertID] = struct{}{}
+
+			if override, ok := osdOverrides[osdResourceID]; ok && override.Disabled {
+				m.clearAlert(alertID)
+				continue
+			}
+
+			m.checkCephSingleOSDState(cluster, osd, osdResourceID, resourceName)
+		}
+		m.clearStaleCephOSDAlerts(resourceID, validAlertIDs)
+		return
+	}
+
 	alertID := fmt.Sprintf("%s-ceph-osd-state", resourceID)
 	if cluster.NumOSDs <= 0 {
 		m.clearAlert(alertID)
@@ -5647,6 +5694,91 @@ func (m *Manager) checkCephOSDState(cluster models.CephCluster, resourceID, reso
 	})
 }
 
+func (m *Manager) checkCephSingleOSDState(cluster models.CephCluster, osd models.CephOSD, osdResourceID, clusterName string) {
+	alertID := fmt.Sprintf("%s-state", osdResourceID)
+	if osd.Up && osd.In {
+		m.clearAlert(alertID)
+		return
+	}
+
+	level := AlertLevelWarning
+	parts := make([]string, 0, 2)
+	if !osd.Up {
+		level = AlertLevelCritical
+		parts = append(parts, "down")
+	}
+	if !osd.In {
+		parts = append(parts, "out")
+	}
+
+	osdName := strings.TrimSpace(osd.Name)
+	if osdName == "" {
+		osdName = fmt.Sprintf("osd.%d", osd.ID)
+	}
+	message := fmt.Sprintf("%s %s is %s", clusterName, osdName, strings.Join(parts, " and "))
+
+	m.upsertStateAlert(&Alert{
+		ID:           alertID,
+		Type:         "ceph-osd-state",
+		Level:        level,
+		ResourceID:   osdResourceID,
+		ResourceName: osdName,
+		Node:         osd.Host,
+		Instance:     cluster.Instance,
+		Message:      message,
+		Value:        1,
+		Threshold:    0,
+		StartTime:    time.Now(),
+		LastSeen:     time.Now(),
+		Metadata: map[string]interface{}{
+			"resourceType":    "ceph-osd",
+			"clusterId":       cluster.ID,
+			"clusterName":     clusterName,
+			"fsid":            cluster.FSID,
+			"osdId":           osd.ID,
+			"osdName":         osdName,
+			"osdHost":         osd.Host,
+			"osdUp":           osd.Up,
+			"osdIn":           osd.In,
+			"osdState":        osd.State,
+			"clearCondition":  "OSD up and in",
+			"lastUpdatedUnix": cluster.LastUpdated.Unix(),
+		},
+	})
+}
+
+func (m *Manager) checkCephPGInconsistent(cluster models.CephCluster, resourceID, resourceName string) {
+	alertID := fmt.Sprintf("%s-ceph-pg-inconsistent", resourceID)
+	if cluster.InconsistentPGs <= 0 {
+		m.clearAlert(alertID)
+		return
+	}
+
+	message := fmt.Sprintf("%s has %d inconsistent PGs", resourceName, cluster.InconsistentPGs)
+	m.upsertStateAlert(&Alert{
+		ID:           alertID,
+		Type:         "ceph-pg-inconsistent",
+		Level:        AlertLevelCritical,
+		ResourceID:   resourceID,
+		ResourceName: resourceName,
+		Node:         "",
+		Instance:     cluster.Instance,
+		Message:      message,
+		Value:        float64(cluster.InconsistentPGs),
+		Threshold:    0,
+		StartTime:    time.Now(),
+		LastSeen:     time.Now(),
+		Metadata: map[string]interface{}{
+			"resourceType":    "ceph",
+			"fsid":            cluster.FSID,
+			"inconsistentPGs": cluster.InconsistentPGs,
+			"numPGs":          cluster.NumPGs,
+			"clearCondition":  "0 inconsistent PGs",
+			"lastUpdatedUnix": cluster.LastUpdated.Unix(),
+		},
+	})
+}
+
 func cephHealthValue(health string) float64 {
 	switch strings.ToUpper(strings.TrimSpace(health)) {
 	case "HEALTH_ERR", "ERR":
@@ -5705,6 +5837,45 @@ func (m *Manager) upsertStateAlert(alert *Alert) {
 func (m *Manager) clearCephClusterAlerts(resourceID string) {
 	m.clearAlert(fmt.Sprintf("%s-ceph-health", resourceID))
 	m.clearAlert(fmt.Sprintf("%s-ceph-osd-state", resourceID))
+	m.clearAlert(fmt.Sprintf("%s-ceph-pg-inconsistent", resourceID))
+	m.clearCephOSDAlerts(resourceID)
+}
+
+func cephOSDResourceID(clusterID string, osdID int) string {
+	return fmt.Sprintf("%s:osd:%d", clusterID, osdID)
+}
+
+func (m *Manager) clearCephOSDAlerts(resourceID string) {
+	prefix := resourceID + ":osd:"
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for alertID, alert := range m.activeAlerts {
+		if alert == nil || alert.Type != "ceph-osd-state" {
+			continue
+		}
+		if strings.HasPrefix(alert.ResourceID, prefix) {
+			m.clearAlertNoLock(alertID)
+		}
+	}
+	m.clearAlertNoLock(fmt.Sprintf("%s-ceph-osd-state", resourceID))
+}
+
+func (m *Manager) clearStaleCephOSDAlerts(resourceID string, valid map[string]struct{}) {
+	prefix := resourceID + ":osd:"
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for alertID, alert := range m.activeAlerts {
+		if alert == nil || alert.Type != "ceph-osd-state" {
+			continue
+		}
+		if !strings.HasPrefix(alert.ResourceID, prefix) {
+			continue
+		}
+		if _, ok := valid[alertID]; ok {
+			continue
+		}
+		m.clearAlertNoLock(alertID)
+	}
 }
 
 // SyncCephAlertsForInstance clears Ceph alerts for clusters that disappeared from an instance.
@@ -5728,6 +5899,10 @@ func (m *Manager) SyncCephAlertsForInstance(instanceName string, clusters []mode
 		}
 		valid[fmt.Sprintf("%s-ceph-health", resourceID)] = struct{}{}
 		valid[fmt.Sprintf("%s-ceph-osd-state", resourceID)] = struct{}{}
+		valid[fmt.Sprintf("%s-ceph-pg-inconsistent", resourceID)] = struct{}{}
+		for _, osd := range cluster.OSDs {
+			valid[fmt.Sprintf("%s-state", cephOSDResourceID(resourceID, osd.ID))] = struct{}{}
+		}
 	}
 
 	m.mu.Lock()
@@ -5736,7 +5911,7 @@ func (m *Manager) SyncCephAlertsForInstance(instanceName string, clusters []mode
 		if alert == nil || strings.TrimSpace(alert.Instance) != instanceName {
 			continue
 		}
-		if alert.Type != "ceph-health" && alert.Type != "ceph-osd-state" {
+		if alert.Type != "ceph-health" && alert.Type != "ceph-osd-state" && alert.Type != "ceph-pg-inconsistent" {
 			continue
 		}
 		if _, ok := valid[alertID]; ok {

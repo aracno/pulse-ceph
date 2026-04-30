@@ -52,6 +52,7 @@ type OverrideType =
   | 'hostDisk'
   | 'storage'
   | 'ceph'
+  | 'cephOsd'
   | 'pbs'
   | 'pmg'
   | 'dockerHost'
@@ -70,6 +71,9 @@ interface Override {
   disabled?: boolean;
   disableConnectivity?: boolean; // For nodes only - disable offline alerts
   poweredOffSeverity?: 'warning' | 'critical';
+  cephDisableHealth?: boolean;
+  cephDisableOSD?: boolean;
+  cephDisablePG?: boolean;
   note?: string;
   backup?: BackupAlertConfig;
   snapshot?: SnapshotAlertConfig;
@@ -1798,7 +1802,12 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
         instance: cluster.instance,
         status: health,
         subtitle,
-        hasOverride: Boolean(override?.disabled),
+        hasOverride: Boolean(
+          override?.disabled ||
+          override?.cephDisableHealth ||
+          override?.cephDisableOSD ||
+          override?.cephDisablePG,
+        ),
         disabled: override?.disabled || false,
         thresholds: {},
         defaults: {},
@@ -1815,6 +1824,64 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
       );
     }
     return clusters;
+  }, []);
+
+  const cephOSDsWithOverrides = createMemo<Resource[]>((prev = []) => {
+    if (editingId()) {
+      return prev;
+    }
+
+    const search = searchTerm().toLowerCase();
+    const overridesMap = new Map((props.overrides() ?? []).map((o) => [o.id, o]));
+    const resources: Resource[] = [];
+
+    (props.cephClusters ?? []).forEach((cluster) => {
+      const clusterOverride = overridesMap.get(cluster.id);
+      const osdAlertsDisabled = Boolean(clusterOverride?.cephDisableOSD);
+      (cluster.osds ?? []).forEach((osd) => {
+        const osdId = `${cluster.id}:osd:${osd.id}`;
+        const override = overridesMap.get(osdId);
+        const osdName = osd.name || `osd.${osd.id}`;
+        const stateParts = [
+          osd.up ? 'up' : 'down',
+          osd.in ? 'in' : 'out',
+          ...(osd.state ?? []),
+        ];
+        const subtitle = [
+          cluster.instance || cluster.name || 'Ceph',
+          osd.host,
+          osdAlertsDisabled ? 'OSD alerts disabled for cluster' : undefined,
+        ].filter(Boolean).join(' - ');
+
+        resources.push({
+          id: osdId,
+          name: osdName,
+          displayName: osdName,
+          type: 'cephOsd' as const,
+          resourceType: 'Ceph OSD',
+          instance: cluster.instance,
+          node: osd.host,
+          status: stateParts.join(', '),
+          subtitle,
+          hasOverride: Boolean(override?.disabled),
+          disabled: override?.disabled || false,
+          thresholds: {},
+          defaults: {},
+          editable: false,
+        });
+      });
+    });
+
+    if (search) {
+      return resources.filter(
+        (osd) =>
+          osd.name.toLowerCase().includes(search) ||
+          osd.node?.toLowerCase().includes(search) ||
+          osd.instance?.toLowerCase().includes(search) ||
+          osd.status?.toLowerCase().includes(search),
+      );
+    }
+    return resources;
   }, []);
 
   const summaryItems = createMemo(() => {
@@ -1942,6 +2009,7 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
       ...allDockerContainers,
       ...storageWithOverrides(),
       ...cephClustersWithOverrides(),
+      ...cephOSDsWithOverrides(),
       ...pbsServersWithOverrides(),
     ];
     const resource = allResources.find((r) => r.id === resourceId);
@@ -2056,6 +2124,9 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
       disabled: resource.disabled,
       disableConnectivity: resource.disableConnectivity,
       poweredOffSeverity: resource.poweredOffSeverity,
+      cephDisableHealth: existingOverrideCheck?.cephDisableHealth,
+      cephDisableOSD: existingOverrideCheck?.cephDisableOSD,
+      cephDisablePG: existingOverrideCheck?.cephDisablePG,
       note: noteForOverride,
       backup: existingOverrideCheck?.backup,
       snapshot: existingOverrideCheck?.snapshot,
@@ -2085,6 +2156,15 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
       }
       if (previousRaw.poweredOffSeverity) {
         hysteresisThresholds.poweredOffSeverity = previousRaw.poweredOffSeverity;
+      }
+      if (previousRaw.cephDisableHealth !== undefined) {
+        hysteresisThresholds.cephDisableHealth = previousRaw.cephDisableHealth;
+      }
+      if (previousRaw.cephDisableOSD !== undefined) {
+        hysteresisThresholds.cephDisableOSD = previousRaw.cephDisableOSD;
+      }
+      if (previousRaw.cephDisablePG !== undefined) {
+        hysteresisThresholds.cephDisablePG = previousRaw.cephDisablePG;
       }
     }
     Object.entries(overrideThresholds).forEach(([metric, value]) => {
@@ -2201,6 +2281,108 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
     props.setHasUnsavedChanges(true);
   };
 
+  type CephAlertToggleKey = 'cephDisableHealth' | 'cephDisableOSD' | 'cephDisablePG';
+
+  const cephClusterById = (clusterId: string) =>
+    (props.cephClusters ?? []).find((cluster) => cluster.id === clusterId);
+
+  const rawConfigHasThresholds = (config: RawOverrideConfig): boolean =>
+    Object.entries(config).some(([, value]) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return false;
+      }
+      return 'trigger' in value;
+    });
+
+  const setCephAlertToggle = (clusterId: string, key: CephAlertToggleKey, disabled: boolean) => {
+    const cluster = cephClusterById(clusterId);
+    if (!cluster) return;
+
+    const currentRaw = props.rawOverridesConfig()[clusterId] ?? {};
+    const nextRaw: RawOverrideConfig = { ...currentRaw };
+    if (disabled) {
+      nextRaw[key] = true;
+    } else {
+      delete nextRaw[key];
+    }
+
+    const hasAnyCephFlag =
+      Boolean(nextRaw.cephDisableHealth) ||
+      Boolean(nextRaw.cephDisableOSD) ||
+      Boolean(nextRaw.cephDisablePG);
+    const hasRawState =
+      Boolean(nextRaw.disabled) ||
+      Boolean(nextRaw.disableConnectivity) ||
+      Boolean(nextRaw.note) ||
+      Boolean(nextRaw.backup) ||
+      Boolean(nextRaw.snapshot) ||
+      rawConfigHasThresholds(nextRaw) ||
+      hasAnyCephFlag;
+
+    const newRawConfig = { ...props.rawOverridesConfig() };
+    if (hasRawState) {
+      newRawConfig[clusterId] = nextRaw;
+    } else {
+      delete newRawConfig[clusterId];
+    }
+    props.setRawOverridesConfig(newRawConfig);
+
+    const existingIndex = props.overrides().findIndex((override) => override.id === clusterId);
+    const existing = existingIndex >= 0 ? props.overrides()[existingIndex] : undefined;
+    const nextOverride: Override = {
+      ...(existing ?? {
+        id: clusterId,
+        name: cluster.name || 'Ceph',
+        type: 'ceph',
+        resourceType: 'Ceph',
+        instance: cluster.instance,
+        thresholds: {},
+      }),
+      cephDisableHealth: Boolean(nextRaw.cephDisableHealth),
+      cephDisableOSD: Boolean(nextRaw.cephDisableOSD),
+      cephDisablePG: Boolean(nextRaw.cephDisablePG),
+    };
+
+    const hasOverride =
+      Boolean(nextOverride.disabled) ||
+      Boolean(nextOverride.disableConnectivity) ||
+      Boolean(nextOverride.poweredOffSeverity) ||
+      Boolean(nextOverride.note) ||
+      Boolean(nextOverride.backup) ||
+      Boolean(nextOverride.snapshot) ||
+      Boolean(nextOverride.cephDisableHealth) ||
+      Boolean(nextOverride.cephDisableOSD) ||
+      Boolean(nextOverride.cephDisablePG) ||
+      Object.keys(nextOverride.thresholds ?? {}).length > 0;
+
+    if (!hasOverride) {
+      props.setOverrides(props.overrides().filter((override) => override.id !== clusterId));
+    } else if (existingIndex >= 0) {
+      const nextOverrides = [...props.overrides()];
+      nextOverrides[existingIndex] = nextOverride;
+      props.setOverrides(nextOverrides);
+    } else {
+      props.setOverrides([...props.overrides(), nextOverride]);
+    }
+
+    if (disabled && props.removeAlerts) {
+      props.removeAlerts((alert) => {
+        if (key === 'cephDisableHealth') {
+          return alert.resourceId === clusterId && alert.type === 'ceph-health';
+        }
+        if (key === 'cephDisablePG') {
+          return alert.resourceId === clusterId && alert.type === 'ceph-pg-inconsistent';
+        }
+        return (
+          alert.type === 'ceph-osd-state' &&
+          (alert.resourceId === clusterId || alert.resourceId.startsWith(`${clusterId}:osd:`))
+        );
+      });
+    }
+
+    props.setHasUnsavedChanges(true);
+  };
+
   const toggleBackup = (resourceId: string, forceState?: boolean) => {
     const allGuests = guestsFlat();
     const allDockerContainers = dockerContainersFlat();
@@ -2294,6 +2476,7 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
       ...allDockerContainers,
       ...storageWithOverrides(),
       ...cephClustersWithOverrides(),
+      ...cephOSDsWithOverrides(),
       ...pbsServersWithOverrides(),
       ...hostAgentsWithOverrides(),
       ...hostDisksWithOverrides(),
@@ -2304,6 +2487,7 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
       (resource.type !== 'guest' &&
         resource.type !== 'storage' &&
         resource.type !== 'ceph' &&
+        resource.type !== 'cephOsd' &&
         resource.type !== 'pbs' &&
         resource.type !== 'dockerContainer' &&
         resource.type !== 'hostAgent' &&
@@ -2418,8 +2602,16 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
       } else if (resource.type === 'ceph') {
         props.removeAlerts(
           (alert) =>
-            alert.resourceId === resourceId &&
-            (alert.type === 'ceph-health' || alert.type === 'ceph-osd-state'),
+            (alert.resourceId === resourceId ||
+              (alert.type === 'ceph-osd-state' &&
+                alert.resourceId.startsWith(`${resourceId}:osd:`))) &&
+            (alert.type === 'ceph-health' ||
+              alert.type === 'ceph-osd-state' ||
+              alert.type === 'ceph-pg-inconsistent'),
+        );
+      } else if (resource.type === 'cephOsd') {
+        props.removeAlerts(
+          (alert) => alert.resourceId === resourceId && alert.type === 'ceph-osd-state',
         );
       }
     }
@@ -3395,6 +3587,76 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
               }
             >
               <div ref={registerSection('ceph')} class="scroll-mt-24">
+                <div class="mb-4 space-y-3">
+                  <For each={props.cephClusters ?? []}>
+                    {(cluster) => {
+                      const override = () =>
+                        props.overrides().find((item) => item.id === cluster.id);
+                      const clusterDisabled = () =>
+                        props.disableAllCeph() || Boolean(override()?.disabled);
+                      const toggleRow = (
+                        label: string,
+                        key: CephAlertToggleKey,
+                        titleEnabled: string,
+                        titleDisabled: string,
+                      ) => {
+                        const disabled = () => Boolean(override()?.[key]);
+                        return (
+                          <div class="flex items-center justify-between gap-3 rounded-md border border-gray-200 px-3 py-2 dark:border-gray-700">
+                            <div class="min-w-0">
+                              <div class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                                {label}
+                              </div>
+                            </div>
+                            <Toggle
+                              size="sm"
+                              checked={!clusterDisabled() && !disabled()}
+                              disabled={props.disableAllCeph() || Boolean(override()?.disabled)}
+                              onToggle={() => setCephAlertToggle(cluster.id, key, !disabled())}
+                              title={disabled() ? titleDisabled : titleEnabled}
+                              ariaLabel={`Toggle ${label} Ceph alerts`}
+                            />
+                          </div>
+                        );
+                      };
+
+                      return (
+                        <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/40">
+                          <div class="mb-3 flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                              <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                                {cluster.instance ? `${cluster.instance} Ceph` : cluster.name || 'Ceph'}
+                              </div>
+                              <div class="text-xs text-gray-500 dark:text-gray-400">
+                                {cluster.health || 'Unknown'} - {cluster.numOsdsUp}/{cluster.numOsds} OSD up - {cluster.inconsistentPGs ?? 0} inconsistent PG
+                              </div>
+                            </div>
+                          </div>
+                          <div class="grid gap-2 md:grid-cols-3">
+                            {toggleRow(
+                              'Cluster Health',
+                              'cephDisableHealth',
+                              'Disable cluster health alerts',
+                              'Enable cluster health alerts',
+                            )}
+                            {toggleRow(
+                              'OSD',
+                              'cephDisableOSD',
+                              'Disable all OSD alerts for this cluster',
+                              'Enable all OSD alerts for this cluster',
+                            )}
+                            {toggleRow(
+                              'PG inconsistent',
+                              'cephDisablePG',
+                              'Disable inconsistent PG alerts',
+                              'Enable inconsistent PG alerts',
+                            )}
+                          </div>
+                        </div>
+                      );
+                    }}
+                  </For>
+                </div>
                 <ResourceTable
                   title=""
                   resources={cephClustersWithOverrides()}
@@ -3417,6 +3679,32 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
                   setHasUnsavedChanges={props.setHasUnsavedChanges}
                   globalDisableFlag={props.disableAllCeph}
                 />
+                <Show when={cephOSDsWithOverrides().length > 0}>
+                  <div class="mt-4">
+                    <ResourceTable
+                      title="Ceph OSDs"
+                      resources={cephOSDsWithOverrides()}
+                      columns={[]}
+                      activeAlerts={props.activeAlerts}
+                      emptyMessage="No Ceph OSDs match the current filters."
+                      onEdit={startEditing}
+                      onSaveEdit={saveEdit}
+                      onCancelEdit={cancelEdit}
+                      onRemoveOverride={removeOverride}
+                      onToggleDisabled={toggleDisabled}
+                      showOfflineAlertsColumn={false}
+                      editingId={editingId}
+                      editingThresholds={editingThresholds}
+                      setEditingThresholds={setEditingThresholds}
+                      editingNote={editingNote}
+                      setEditingNote={setEditingNote}
+                      formatMetricValue={formatMetricValue}
+                      hasActiveAlert={hasActiveAlert}
+                      setHasUnsavedChanges={props.setHasUnsavedChanges}
+                      globalDisableFlag={props.disableAllCeph}
+                    />
+                  </div>
+                </Show>
               </div>
             </CollapsibleSection>
           </Show>

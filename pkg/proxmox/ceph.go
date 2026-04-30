@@ -112,21 +112,40 @@ func (m *CephMgrMap) UnmarshalJSON(data []byte) error {
 
 // CephOSDMap captures summary statistics about OSDs.
 type CephOSDMap struct {
-	NumOSDs   int `json:"num_osds"`
-	NumUpOSDs int `json:"num_up_osds"`
-	NumInOSDs int `json:"num_in_osds"`
+	NumOSDs   int             `json:"num_osds"`
+	NumUpOSDs int             `json:"num_up_osds"`
+	NumInOSDs int             `json:"num_in_osds"`
+	OSDs      []CephOSDStatus `json:"osds"`
+}
+
+// CephOSDStatus captures the state of a single OSD.
+type CephOSDStatus struct {
+	ID     int      `json:"osd"`
+	Name   string   `json:"name"`
+	Host   string   `json:"host"`
+	Up     int      `json:"up"`
+	In     int      `json:"in"`
+	State  []string `json:"state"`
+	Weight float64  `json:"weight"`
 }
 
 // CephPGMap captures placement group statistics.
 type CephPGMap struct {
-	NumPGs        int     `json:"num_pgs"`
-	BytesTotal    uint64  `json:"bytes_total"`
-	BytesUsed     uint64  `json:"bytes_used"`
-	BytesAvail    uint64  `json:"bytes_avail"`
-	DataBytes     uint64  `json:"data_bytes"`
-	Dirty         uint64  `json:"dirty"`
-	Unfound       uint64  `json:"unfound"`
-	DegradedRatio float64 `json:"degraded_ratio"`
+	NumPGs        int           `json:"num_pgs"`
+	BytesTotal    uint64        `json:"bytes_total"`
+	BytesUsed     uint64        `json:"bytes_used"`
+	BytesAvail    uint64        `json:"bytes_avail"`
+	DataBytes     uint64        `json:"data_bytes"`
+	Dirty         uint64        `json:"dirty"`
+	Unfound       uint64        `json:"unfound"`
+	DegradedRatio float64       `json:"degraded_ratio"`
+	PGsByState    []CephPGState `json:"pgs_by_state"`
+}
+
+// CephPGState captures a PG count for a named Ceph state.
+type CephPGState struct {
+	StateName string `json:"state_name"`
+	Count     int    `json:"count"`
 }
 
 // CephDF represents the data returned by /cluster/ceph/df.

@@ -211,6 +211,7 @@ type OverrideType =
   | 'hostDisk'
   | 'storage'
   | 'ceph'
+  | 'cephOsd'
   | 'pbs'
   | 'pmg'
   | 'dockerHost'
@@ -227,6 +228,9 @@ interface Override {
   disabled?: boolean; // Completely disable alerts for this guest/storage
   disableConnectivity?: boolean; // For nodes/hosts - disable offline/connectivity alerts
   poweredOffSeverity?: 'warning' | 'critical';
+  cephDisableHealth?: boolean;
+  cephDisableOSD?: boolean;
+  cephDisablePG?: boolean;
   backup?: BackupAlertConfig;
   snapshot?: SnapshotAlertConfig;
   thresholds: {
@@ -999,6 +1003,28 @@ export function Alerts() {
                   resourceType: 'Ceph',
                   instance: cephCluster.instance,
                   disabled: thresholds.disabled || false,
+                  cephDisableHealth: thresholds.cephDisableHealth || false,
+                  cephDisableOSD: thresholds.cephDisableOSD || false,
+                  cephDisablePG: thresholds.cephDisablePG || false,
+                  thresholds: {},
+                });
+                return;
+              }
+
+              const cephOSDMatch = key.match(/^(.*):osd:(\d+)$/);
+              if (cephOSDMatch) {
+                const clusterId = cephOSDMatch[1];
+                const osdId = Number(cephOSDMatch[2]);
+                const cluster = (state.cephClusters || []).find((item) => item.id === clusterId);
+                const osd = cluster?.osds?.find((item) => item.id === osdId);
+                overridesList.push({
+                  id: key,
+                  name: osd?.name || `osd.${osdId}`,
+                  type: 'cephOsd',
+                  resourceType: 'Ceph OSD',
+                  node: osd?.host,
+                  instance: cluster?.instance,
+                  disabled: thresholds.disabled || false,
                   thresholds: {},
                 });
                 return;
@@ -1054,8 +1080,14 @@ export function Alerts() {
             (newOverride.type === 'guest' ||
               newOverride.type === 'storage' ||
               newOverride.type === 'ceph' ||
+              newOverride.type === 'cephOsd' ||
               newOverride.type === 'hostDisk') &&
             newOverride.disabled !== existing.disabled;
+          const cephChanged =
+            newOverride.type === 'ceph' &&
+            (newOverride.cephDisableHealth !== existing.cephDisableHealth ||
+              newOverride.cephDisableOSD !== existing.cephDisableOSD ||
+              newOverride.cephDisablePG !== existing.cephDisablePG);
           const severityChanged =
             (newOverride.type === 'guest' || newOverride.type === 'dockerContainer') &&
             (newOverride.poweredOffSeverity ?? null) !==
@@ -1064,6 +1096,7 @@ export function Alerts() {
             thresholdsChanged ||
             connectivityChanged ||
             disabledChanged ||
+            cephChanged ||
             severityChanged
           );
         });

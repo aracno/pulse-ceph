@@ -627,9 +627,21 @@ export interface CephCluster {
   numOsdsUp: number;
   numOsdsIn: number;
   numPGs: number;
+  inconsistentPGs?: number;
+  osds?: CephOSD[];
   pools?: CephPool[];
   services?: CephServiceStatus[];
   lastUpdated: number;
+}
+
+export interface CephOSD {
+  id: number;
+  name: string;
+  host?: string;
+  up: boolean;
+  in: boolean;
+  state?: string[];
+  weight?: number;
 }
 
 export interface CephPool {
