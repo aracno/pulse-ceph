@@ -502,25 +502,27 @@ type StorageFrontend struct {
 
 // CephClusterFrontend represents a Ceph cluster with frontend-friendly field names
 type CephClusterFrontend struct {
-	ID             string              `json:"id"`
-	Instance       string              `json:"instance"`
-	Name           string              `json:"name"`
-	FSID           string              `json:"fsid,omitempty"`
-	Health         string              `json:"health"`
-	HealthMessage  string              `json:"healthMessage,omitempty"`
-	TotalBytes     int64               `json:"totalBytes"`
-	UsedBytes      int64               `json:"usedBytes"`
-	AvailableBytes int64               `json:"availableBytes"`
-	UsagePercent   float64             `json:"usagePercent"`
-	NumMons        int                 `json:"numMons"`
-	NumMgrs        int                 `json:"numMgrs"`
-	NumOSDs        int                 `json:"numOsds"`
-	NumOSDsUp      int                 `json:"numOsdsUp"`
-	NumOSDsIn      int                 `json:"numOsdsIn"`
-	NumPGs         int                 `json:"numPGs"`
-	Pools          []CephPool          `json:"pools,omitempty"`
-	Services       []CephServiceStatus `json:"services,omitempty"`
-	LastUpdated    int64               `json:"lastUpdated"`
+	ID              string              `json:"id"`
+	Instance        string              `json:"instance"`
+	Name            string              `json:"name"`
+	FSID            string              `json:"fsid,omitempty"`
+	Health          string              `json:"health"`
+	HealthMessage   string              `json:"healthMessage,omitempty"`
+	TotalBytes      int64               `json:"totalBytes"`
+	UsedBytes       int64               `json:"usedBytes"`
+	AvailableBytes  int64               `json:"availableBytes"`
+	UsagePercent    float64             `json:"usagePercent"`
+	NumMons         int                 `json:"numMons"`
+	NumMgrs         int                 `json:"numMgrs"`
+	NumOSDs         int                 `json:"numOsds"`
+	NumOSDsUp       int                 `json:"numOsdsUp"`
+	NumOSDsIn       int                 `json:"numOsdsIn"`
+	NumPGs          int                 `json:"numPGs"`
+	InconsistentPGs int                 `json:"inconsistentPGs,omitempty"`
+	OSDs            []CephOSD           `json:"osds,omitempty"`
+	Pools           []CephPool          `json:"pools,omitempty"`
+	Services        []CephServiceStatus `json:"services,omitempty"`
+	LastUpdated     int64               `json:"lastUpdated"`
 }
 
 // ReplicationJobFrontend represents a replication job for the frontend.

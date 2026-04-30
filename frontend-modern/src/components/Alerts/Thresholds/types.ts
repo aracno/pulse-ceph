@@ -24,6 +24,7 @@ export type ResourceType =
     | 'hostAgent'
     | 'hostDisk'
     | 'ceph'
+    | 'cephOsd'
     | 'dockerHost'
     | 'dockerContainer';
 
@@ -340,6 +341,7 @@ export const RESOURCE_COLUMNS: Record<ResourceType, ThresholdColumn[]> = {
         { key: 'usage', label: 'Usage %', unit: '%' },
     ],
     ceph: [],
+    cephOsd: [],
     pbs: [
         { key: 'cpu', label: 'CPU %', unit: '%' },
         { key: 'memory', label: 'Memory %', unit: '%' },

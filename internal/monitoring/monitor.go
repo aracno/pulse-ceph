@@ -12361,22 +12361,23 @@ func convertAgentCephToGlobalCluster(ceph *agentshost.CephCluster, hostname, hos
 	}
 
 	cluster := models.CephCluster{
-		ID:             id,
-		Instance:       "agent:" + hostname,
-		Name:           hostname + " Ceph",
-		FSID:           ceph.FSID,
-		Health:         strings.TrimPrefix(ceph.Health.Status, "HEALTH_"),
-		TotalBytes:     int64(ceph.PGMap.BytesTotal),
-		UsedBytes:      int64(ceph.PGMap.BytesUsed),
-		AvailableBytes: int64(ceph.PGMap.BytesAvailable),
-		UsagePercent:   ceph.PGMap.UsagePercent,
-		NumMons:        ceph.MonMap.NumMons,
-		NumMgrs:        ceph.MgrMap.NumMgrs,
-		NumOSDs:        ceph.OSDMap.NumOSDs,
-		NumOSDsUp:      ceph.OSDMap.NumUp,
-		NumOSDsIn:      ceph.OSDMap.NumIn,
-		NumPGs:         ceph.PGMap.NumPGs,
-		LastUpdated:    timestamp,
+		ID:              id,
+		Instance:        "agent:" + hostname,
+		Name:            hostname + " Ceph",
+		FSID:            ceph.FSID,
+		Health:          strings.TrimPrefix(ceph.Health.Status, "HEALTH_"),
+		TotalBytes:      int64(ceph.PGMap.BytesTotal),
+		UsedBytes:       int64(ceph.PGMap.BytesUsed),
+		AvailableBytes:  int64(ceph.PGMap.BytesAvailable),
+		UsagePercent:    ceph.PGMap.UsagePercent,
+		NumMons:         ceph.MonMap.NumMons,
+		NumMgrs:         ceph.MgrMap.NumMgrs,
+		NumOSDs:         ceph.OSDMap.NumOSDs,
+		NumOSDsUp:       ceph.OSDMap.NumUp,
+		NumOSDsIn:       ceph.OSDMap.NumIn,
+		NumPGs:          ceph.PGMap.NumPGs,
+		InconsistentPGs: countAgentInconsistentPGs(ceph),
+		LastUpdated:     timestamp,
 	}
 
 	// Build health message from checks
@@ -12412,4 +12413,31 @@ func convertAgentCephToGlobalCluster(ceph *agentshost.CephCluster, hostname, hos
 	}
 
 	return cluster
+}
+
+func countAgentInconsistentPGs(ceph *agentshost.CephCluster) int {
+	if ceph == nil {
+		return 0
+	}
+	for name, check := range ceph.Health.Checks {
+		text := strings.ToLower(name + " " + check.Message + " " + strings.Join(check.Detail, " "))
+		if !strings.Contains(text, "inconsistent") && !strings.Contains(text, "pg_damaged") {
+			continue
+		}
+		if count := extractFirstPositiveInt(text); count > 0 {
+			return count
+		}
+		return 1
+	}
+	for _, summary := range ceph.Health.Summary {
+		text := strings.ToLower(summary.Message)
+		if !strings.Contains(text, "inconsistent") && !strings.Contains(text, "pg_damaged") {
+			continue
+		}
+		if count := extractFirstPositiveInt(text); count > 0 {
+			return count
+		}
+		return 1
+	}
+	return 0
 }

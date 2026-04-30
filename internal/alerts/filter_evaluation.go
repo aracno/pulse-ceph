@@ -217,6 +217,9 @@ func parseCanonicalGuestKey(guestID string) (guestOverrideIdentity, bool) {
 
 	instance := strings.TrimSpace(parts[0])
 	node := strings.TrimSpace(parts[1])
+	if strings.EqualFold(node, "osd") {
+		return guestOverrideIdentity{}, false
+	}
 	if instance == "" {
 		instance = node
 	}

@@ -770,25 +770,38 @@ type ZFSDevice struct {
 
 // CephCluster represents the health and capacity information for a Ceph cluster
 type CephCluster struct {
-	ID             string              `json:"id"`
-	Instance       string              `json:"instance"`
-	Name           string              `json:"name"`
-	FSID           string              `json:"fsid,omitempty"`
-	Health         string              `json:"health"`
-	HealthMessage  string              `json:"healthMessage,omitempty"`
-	TotalBytes     int64               `json:"totalBytes"`
-	UsedBytes      int64               `json:"usedBytes"`
-	AvailableBytes int64               `json:"availableBytes"`
-	UsagePercent   float64             `json:"usagePercent"`
-	NumMons        int                 `json:"numMons"`
-	NumMgrs        int                 `json:"numMgrs"`
-	NumOSDs        int                 `json:"numOsds"`
-	NumOSDsUp      int                 `json:"numOsdsUp"`
-	NumOSDsIn      int                 `json:"numOsdsIn"`
-	NumPGs         int                 `json:"numPGs"`
-	Pools          []CephPool          `json:"pools,omitempty"`
-	Services       []CephServiceStatus `json:"services,omitempty"`
-	LastUpdated    time.Time           `json:"lastUpdated"`
+	ID              string              `json:"id"`
+	Instance        string              `json:"instance"`
+	Name            string              `json:"name"`
+	FSID            string              `json:"fsid,omitempty"`
+	Health          string              `json:"health"`
+	HealthMessage   string              `json:"healthMessage,omitempty"`
+	TotalBytes      int64               `json:"totalBytes"`
+	UsedBytes       int64               `json:"usedBytes"`
+	AvailableBytes  int64               `json:"availableBytes"`
+	UsagePercent    float64             `json:"usagePercent"`
+	NumMons         int                 `json:"numMons"`
+	NumMgrs         int                 `json:"numMgrs"`
+	NumOSDs         int                 `json:"numOsds"`
+	NumOSDsUp       int                 `json:"numOsdsUp"`
+	NumOSDsIn       int                 `json:"numOsdsIn"`
+	NumPGs          int                 `json:"numPGs"`
+	InconsistentPGs int                 `json:"inconsistentPGs,omitempty"`
+	OSDs            []CephOSD           `json:"osds,omitempty"`
+	Pools           []CephPool          `json:"pools,omitempty"`
+	Services        []CephServiceStatus `json:"services,omitempty"`
+	LastUpdated     time.Time           `json:"lastUpdated"`
+}
+
+// CephOSD represents the state of a single Ceph OSD.
+type CephOSD struct {
+	ID     int      `json:"id"`
+	Name   string   `json:"name"`
+	Host   string   `json:"host,omitempty"`
+	Up     bool     `json:"up"`
+	In     bool     `json:"in"`
+	State  []string `json:"state,omitempty"`
+	Weight float64  `json:"weight,omitempty"`
 }
 
 // CephPool represents usage statistics for a Ceph pool

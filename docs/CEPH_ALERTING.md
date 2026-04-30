@@ -10,7 +10,9 @@ resource, and resolve automatically when the monitored condition clears.
 Ceph alerting covers:
 
 - cluster health state, such as `HEALTH_WARN` and `HEALTH_ERR`
-- OSD availability state, based on `numOsds`, `numOsdsUp`, and `numOsdsIn`
+- OSD availability state, based on the individual OSD list when available
+- fallback OSD availability state, based on `numOsds`, `numOsdsUp`, and `numOsdsIn`
+- inconsistent placement groups
 - Proxmox API based Ceph data collected during the regular polling cycle
 - host-agent Ceph data when an agent reports Ceph state
 - global and per-cluster alert disable controls in the Alerts threshold UI
@@ -64,7 +66,7 @@ Alert type: `ceph-osd-state`
 Resolution condition:
 
 - no OSD data is available, or
-- all OSDs are up and in
+- all monitored OSDs are up and in
 
 Warning condition:
 
@@ -73,6 +75,19 @@ Warning condition:
 Critical condition:
 
 - one or more OSDs are down
+
+When Proxmox returns the individual OSD list, Pulse emits one alert per affected
+OSD. The resource ID is:
+
+```text
+<cluster-id>:osd:<osd-id>
+```
+
+This lets the UI disable alerting for a single noisy or intentionally removed
+OSD without suppressing the rest of the cluster.
+
+When the individual OSD list is unavailable, Pulse falls back to the aggregate
+OSD counters and emits a cluster-level OSD alert.
 
 Pulse computes:
 
@@ -83,6 +98,22 @@ osdsOut  = max(0, numOsds - numOsdsIn)
 
 The alert metadata includes the OSD counts, Ceph FSID, clear condition, and last
 Ceph update timestamp.
+
+### PG Inconsistent
+
+Alert type: `ceph-pg-inconsistent`
+
+Resolution condition:
+
+- inconsistent PG count is zero or unavailable
+
+Critical condition:
+
+- one or more placement groups are inconsistent
+
+Pulse reads inconsistent PGs from `pgs_by_state` when Proxmox exposes that data.
+If the count is not present there, Pulse also inspects Ceph health checks and
+summaries for `inconsistent` or `PG_DAMAGED` messages.
 
 ## Alert Configuration
 
@@ -106,8 +137,35 @@ Per-cluster overrides use the cluster resource ID as the key:
 }
 ```
 
-When `disableAllCeph` is enabled, all Ceph health and OSD-state alerts are
-cleared and no new Ceph alerts are emitted until the flag is disabled again.
+Independent Ceph detector toggles live on the cluster override:
+
+```json
+{
+  "overrides": {
+    "aoostar-pve01": {
+      "cephDisableHealth": true,
+      "cephDisableOSD": true,
+      "cephDisablePG": true
+    }
+  }
+}
+```
+
+Individual OSD overrides use the OSD resource ID:
+
+```json
+{
+  "overrides": {
+    "aoostar-pve01:osd:3": {
+      "disabled": true
+    }
+  }
+}
+```
+
+When `disableAllCeph` is enabled, all Ceph health, OSD-state, and inconsistent
+PG alerts are cleared and no new Ceph alerts are emitted until the flag is
+disabled again.
 
 When a single Ceph resource override has `disabled: true`, only that cluster's
 Ceph alerts are cleared and suppressed.
@@ -122,13 +180,16 @@ The section shows:
 - cluster display name
 - current Ceph health
 - OSD summary in the form `<up>/<total> up, <in>/<total> in`
+- inconsistent PG count
 - active alert indicators through the existing alert table behavior
 - a global Ceph alert toggle in the section header
+- independent toggles for `Cluster Health`, `OSD`, and `PG inconsistent`
 - a per-cluster disable toggle in the resource row
+- individual OSD rows with per-OSD alert toggles
 
 Ceph rows are intentionally not editable for numeric thresholds. The only
-resource-level control is enable/disable, matching the state-based nature of
-Ceph health alerts.
+resource-level controls are enable/disable toggles, matching the state-based
+nature of Ceph health alerts.
 
 ## Local Docker Deployment
 
@@ -202,8 +263,14 @@ Backend:
 
 - `internal/alerts/alerts.go`
 - `internal/alerts/ceph_test.go`
+- `internal/alerts/filter_evaluation.go`
+- `internal/models/converters.go`
+- `internal/models/models.go`
+- `internal/models/models_frontend.go`
 - `internal/monitoring/monitor.go`
 - `internal/monitoring/monitor_polling.go`
+- `internal/monitoring/ceph.go`
+- `pkg/proxmox/ceph.go`
 
 Frontend:
 
@@ -211,6 +278,7 @@ Frontend:
 - `frontend-modern/src/components/Alerts/ResourceTable.tsx`
 - `frontend-modern/src/components/Alerts/Thresholds/types.ts`
 - `frontend-modern/src/pages/Alerts.tsx`
+- `frontend-modern/src/types/api.ts`
 - `frontend-modern/src/types/alerts.ts`
 
 ## Operational Notes
@@ -218,6 +286,9 @@ Frontend:
 - Ceph alerting depends on the Ceph data already collected by Pulse.
 - If the Proxmox API token cannot read Ceph status, the Ceph section may be
   empty and no Ceph alerts will be evaluated.
+- Per-OSD rows depend on the Proxmox Ceph status payload exposing individual
+  OSD entries. If only aggregate OSD counts are available, alerting still works
+  at cluster level but individual OSD toggles cannot be shown.
 - API routes may require authentication; unauthenticated checks against
   `/api/state`, `/api/alerts/active`, or `/api/alerts/config` can return `401`.
 - The initial alert evaluation happens during the monitoring poll cycle. A
@@ -239,16 +310,23 @@ docker logs --tail 200 pulse-ceph
 
 ### Ceph Health Is Visible But No Alert Fires
 
-Verify global and per-resource disable settings:
+Verify global, per-cluster, and detector-specific disable settings:
 
 - `disableAllCeph` must be `false`
 - the cluster override must not contain `disabled: true`
+- `cephDisableHealth` must not be `true` for cluster health alerts
+- `cephDisableOSD` must not be `true` for OSD alerts
+- `cephDisablePG` must not be `true` for inconsistent PG alerts
 - alert activation state must allow notifications if you are testing delivery
 
 ### OSD Alert Does Not Fire
 
-Pulse needs valid OSD counts. If `numOsds` is zero or unavailable, Pulse clears
-the OSD-state alert because it cannot safely infer degradation.
+Pulse needs individual OSD state or valid aggregate OSD counts. If `numOsds` is
+zero or unavailable, Pulse clears the OSD-state alert because it cannot safely
+infer degradation.
+
+Also check whether the OSD row has `disabled: true` or the cluster has
+`cephDisableOSD: true`.
 
 ### Tests Fail Around Time Zones
 

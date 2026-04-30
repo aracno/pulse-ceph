@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -213,30 +215,116 @@ func buildCephClusterModel(instanceName string, status *proxmox.CephStatus, df *
 	healthMsg := summarizeCephHealth(status)
 	numMons := countCephMonitorDaemons(status)
 	numMgrs := countCephManagerDaemons(status)
+	osds := buildCephOSDModels(status)
+	inconsistentPGs := countInconsistentPGs(status)
 
 	cluster := models.CephCluster{
-		ID:             clusterID,
-		Instance:       instanceName,
-		Name:           "Ceph",
-		FSID:           status.FSID,
-		Health:         status.Health.Status,
-		HealthMessage:  healthMsg,
-		TotalBytes:     totalBytes,
-		UsedBytes:      usedBytes,
-		AvailableBytes: availBytes,
-		UsagePercent:   usagePercent,
-		NumMons:        numMons,
-		NumMgrs:        numMgrs,
-		NumOSDs:        status.OSDMap.NumOSDs,
-		NumOSDsUp:      status.OSDMap.NumUpOSDs,
-		NumOSDsIn:      status.OSDMap.NumInOSDs,
-		NumPGs:         status.PGMap.NumPGs,
-		Pools:          pools,
-		Services:       services,
-		LastUpdated:    time.Now(),
+		ID:              clusterID,
+		Instance:        instanceName,
+		Name:            "Ceph",
+		FSID:            status.FSID,
+		Health:          status.Health.Status,
+		HealthMessage:   healthMsg,
+		TotalBytes:      totalBytes,
+		UsedBytes:       usedBytes,
+		AvailableBytes:  availBytes,
+		UsagePercent:    usagePercent,
+		NumMons:         numMons,
+		NumMgrs:         numMgrs,
+		NumOSDs:         status.OSDMap.NumOSDs,
+		NumOSDsUp:       status.OSDMap.NumUpOSDs,
+		NumOSDsIn:       status.OSDMap.NumInOSDs,
+		NumPGs:          status.PGMap.NumPGs,
+		InconsistentPGs: inconsistentPGs,
+		OSDs:            osds,
+		Pools:           pools,
+		Services:        services,
+		LastUpdated:     time.Now(),
 	}
 
 	return cluster
+}
+
+func buildCephOSDModels(status *proxmox.CephStatus) []models.CephOSD {
+	if status == nil || len(status.OSDMap.OSDs) == 0 {
+		return nil
+	}
+
+	osds := make([]models.CephOSD, 0, len(status.OSDMap.OSDs))
+	for _, osd := range status.OSDMap.OSDs {
+		name := strings.TrimSpace(osd.Name)
+		if name == "" {
+			name = fmt.Sprintf("osd.%d", osd.ID)
+		}
+		osds = append(osds, models.CephOSD{
+			ID:     osd.ID,
+			Name:   name,
+			Host:   osd.Host,
+			Up:     osd.Up > 0,
+			In:     osd.In > 0,
+			State:  append([]string(nil), osd.State...),
+			Weight: osd.Weight,
+		})
+	}
+
+	return osds
+}
+
+func countInconsistentPGs(status *proxmox.CephStatus) int {
+	if status == nil {
+		return 0
+	}
+
+	total := 0
+	for _, state := range status.PGMap.PGsByState {
+		if strings.Contains(strings.ToLower(state.StateName), "inconsistent") && state.Count > 0 {
+			total += state.Count
+		}
+	}
+	if total > 0 {
+		return total
+	}
+
+	for name, check := range status.Health.Checks {
+		text := strings.ToLower(name + " " + extractCephCheckSummary(check.Summary))
+		for _, detail := range check.Detail {
+			text += " " + strings.ToLower(detail.Message)
+		}
+		if !strings.Contains(text, "inconsistent") && !strings.Contains(text, "pg_damaged") {
+			continue
+		}
+		if count := extractFirstPositiveInt(text); count > 0 {
+			return count
+		}
+		return 1
+	}
+
+	for _, summary := range status.Health.Summary {
+		text := strings.ToLower(summary.Summary + " " + summary.Message)
+		if !strings.Contains(text, "inconsistent") && !strings.Contains(text, "pg_damaged") {
+			continue
+		}
+		if count := extractFirstPositiveInt(text); count > 0 {
+			return count
+		}
+		return 1
+	}
+
+	return 0
+}
+
+var firstPositiveIntPattern = regexp.MustCompile(`\b([1-9][0-9]*)\b`)
+
+func extractFirstPositiveInt(value string) int {
+	match := firstPositiveIntPattern.FindStringSubmatch(value)
+	if len(match) < 2 {
+		return 0
+	}
+	parsed, err := strconv.Atoi(match[1])
+	if err != nil {
+		return 0
+	}
+	return parsed
 }
 
 func countCephMonitorDaemons(status *proxmox.CephStatus) int {
