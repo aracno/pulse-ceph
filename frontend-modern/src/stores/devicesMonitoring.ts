@@ -1,4 +1,5 @@
 import { createSignal } from 'solid-js';
+import { DevicesAPI } from '@/api/devices';
 
 export type DeviceAccountType = 'ping' | 'unifi' | 'snmp';
 export type DeviceStatus = 'online' | 'warning' | 'offline' | 'unknown';
@@ -24,6 +25,8 @@ export interface DeviceAccount {
   retries?: number;
   notes?: string;
   createdAt: string;
+  lastCheckedAt?: string;
+  lastError?: string;
 }
 
 export interface DeviceInventoryItem {
@@ -46,36 +49,28 @@ export interface DeviceInventoryItem {
   lastSeen?: string;
   lastCheckedAt?: string;
   notes?: string;
+  raw?: Record<string, unknown>;
+}
+
+export interface DeviceAlertSettings {
+  enabled: boolean;
+  offlineEnabled: boolean;
+  warningEnabled: boolean;
+  latencyEnabled: boolean;
+  latencyWarnMs: number;
+  packetLossEnabled: boolean;
+  packetLossWarnPct: number;
+  firmwareEnabled: boolean;
+  checkOverrides?: Record<string, boolean>;
+  deviceOverrides?: Record<string, boolean>;
+  lastEvaluatedAt?: string;
+  lastEvaluationSummary?: Record<string, number>;
 }
 
 const ACCOUNTS_KEY = 'pulse.devices.accounts.v1';
 const DEVICES_KEY = 'pulse.devices.inventory.v1';
 
 const nowIso = () => new Date().toISOString();
-
-const makeId = (prefix: string) => {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-};
-
-const safeParse = <T,>(key: string, fallback: T): T => {
-  if (typeof window === 'undefined') return fallback;
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw) as T;
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
-};
-
-const persist = <T,>(key: string, value: T) => {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(key, JSON.stringify(value));
-};
 
 const defaultPingAccount = (): DeviceAccount => ({
   id: 'account-ping-default',
@@ -89,131 +84,130 @@ const defaultPingAccount = (): DeviceAccount => ({
   createdAt: nowIso(),
 });
 
-const loadAccounts = () => {
-  const stored = safeParse<DeviceAccount[]>(ACCOUNTS_KEY, []);
-  if (stored.length > 0) return stored;
-  return [defaultPingAccount()];
-};
+const defaultAlerts = (): DeviceAlertSettings => ({
+  enabled: true,
+  offlineEnabled: true,
+  warningEnabled: true,
+  latencyEnabled: true,
+  latencyWarnMs: 150,
+  packetLossEnabled: true,
+  packetLossWarnPct: 5,
+  firmwareEnabled: true,
+  checkOverrides: {},
+  deviceOverrides: {},
+});
 
-const [accounts, setAccounts] = createSignal<DeviceAccount[]>(loadAccounts());
-const [devices, setDevices] = createSignal<DeviceInventoryItem[]>(
-  safeParse<DeviceInventoryItem[]>(DEVICES_KEY, []),
-);
+const [accounts, setAccounts] = createSignal<DeviceAccount[]>([defaultPingAccount()]);
+const [devices, setDevices] = createSignal<DeviceInventoryItem[]>([]);
+const [alerts, setAlerts] = createSignal<DeviceAlertSettings>(defaultAlerts());
+const [loading, setLoading] = createSignal(false);
 
-const saveAccounts = (next: DeviceAccount[]) => {
-  setAccounts(next);
-  persist(ACCOUNTS_KEY, next);
-};
-
-const saveDevices = (next: DeviceInventoryItem[]) => {
-  setDevices(next);
-  persist(DEVICES_KEY, next);
-};
-
-const accountDefaults = (type: DeviceAccountType): Omit<DeviceAccount, 'id' | 'type' | 'createdAt'> => {
-  if (type === 'unifi') {
-    return {
-      name: 'UniFi Site Manager',
-      enabled: true,
-      intervalSeconds: 60,
-      host: 'https://api.ui.com',
-      siteFilter: '',
-      apiKeyHint: '',
-    };
+const readLegacy = <T,>(key: string, fallback: T): T => {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
   }
-  if (type === 'snmp') {
-    return {
-      name: 'SNMP v2c',
-      enabled: true,
-      intervalSeconds: 60,
-      snmpVersion: 'v2c',
-      communityHint: '',
-      timeoutMs: 2000,
-      retries: 2,
-    };
+};
+
+const applyState = (state: {
+  checks?: DeviceAccount[];
+  devices?: DeviceInventoryItem[];
+  alerts?: DeviceAlertSettings;
+}) => {
+  setAccounts(state.checks?.length ? state.checks : [defaultPingAccount()]);
+  setDevices(state.devices ?? []);
+  setAlerts({ ...defaultAlerts(), ...(state.alerts ?? {}) });
+};
+
+const migrateLegacyIfNeeded = async () => {
+  const legacyChecks = readLegacy<DeviceAccount[]>(ACCOUNTS_KEY, []);
+  const legacyDevices = readLegacy<DeviceInventoryItem[]>(DEVICES_KEY, []);
+  if (legacyChecks.length === 0 && legacyDevices.length === 0) return;
+  if (accounts().length > 1 || devices().length > 0) return;
+
+  const savedChecks = new Map<string, DeviceAccount>();
+  for (const check of legacyChecks) {
+    const saved = check.id === 'account-ping-default'
+      ? await DevicesAPI.updateCheck(check.id, check)
+      : await DevicesAPI.createCheck(check);
+    savedChecks.set(check.id, saved);
   }
-  return {
-    name: 'Ping',
-    enabled: true,
-    intervalSeconds: 30,
-    timeoutMs: 1500,
-    retries: 2,
-  };
+  for (const device of legacyDevices) {
+    const mappedCheck = savedChecks.get(device.accountId);
+    await DevicesAPI.createDevice({
+      ...device,
+      accountId: mappedCheck?.id ?? device.accountId,
+      accountType: mappedCheck?.type ?? device.accountType,
+    });
+  }
+  const refreshed = await DevicesAPI.getState();
+  applyState(refreshed);
 };
 
 export const devicesMonitoringStore = {
   accounts,
   devices,
-  addAccount(input: Partial<DeviceAccount> & { type: DeviceAccountType }) {
-    const defaults = accountDefaults(input.type);
-    const account: DeviceAccount = {
-      ...defaults,
-      ...input,
-      id: makeId('account'),
-      type: input.type,
-      createdAt: nowIso(),
-    };
-    saveAccounts([...accounts(), account]);
+  alerts,
+  loading,
+  async initialize() {
+    setLoading(true);
+    try {
+      const state = await DevicesAPI.getState();
+      applyState(state);
+      await migrateLegacyIfNeeded();
+    } finally {
+      setLoading(false);
+    }
+  },
+  async addAccount(input: Partial<DeviceAccount> & { type: DeviceAccountType }) {
+    const account = await DevicesAPI.createCheck(input);
+    setAccounts([...accounts().filter((item) => item.id !== account.id), account]);
     return account;
   },
-  updateAccount(id: string, patch: Partial<DeviceAccount>) {
-    saveAccounts(accounts().map((account) => (account.id === id ? { ...account, ...patch } : account)));
+  async updateAccount(id: string, patch: Partial<DeviceAccount>) {
+    const existing = accounts().find((account) => account.id === id);
+    const account = await DevicesAPI.updateCheck(id, { ...existing, ...patch, id });
+    setAccounts(accounts().map((item) => (item.id === id ? account : item)));
   },
-  removeAccount(id: string) {
-    if (id === 'account-ping-default') return;
-    saveAccounts(accounts().filter((account) => account.id !== id));
-    saveDevices(devices().filter((device) => device.accountId !== id));
+  async removeAccount(id: string) {
+    await DevicesAPI.deleteCheck(id);
+    setAccounts(accounts().filter((account) => account.id !== id));
+    setDevices(devices().filter((device) => device.accountId !== id));
   },
-  addDevice(input: Omit<DeviceInventoryItem, 'id' | 'status' | 'lastSeen'> & { status?: DeviceStatus }) {
-    const account = accounts().find((item) => item.id === input.accountId);
-    const item: DeviceInventoryItem = {
-      ...input,
-      accountType: account?.type ?? input.accountType,
-      id: makeId('device'),
-      status: input.status ?? 'unknown',
-      lastSeen: nowIso(),
-      lastCheckedAt: undefined,
-    };
-    saveDevices([...devices(), item]);
+  async addDevice(input: Omit<DeviceInventoryItem, 'id' | 'status' | 'lastSeen'> & { status?: DeviceStatus }) {
+    const item = await DevicesAPI.createDevice(input);
+    setDevices([...devices().filter((device) => device.id !== item.id), item]);
     return item;
   },
-  updateDevice(id: string, patch: Partial<DeviceInventoryItem>) {
-    saveDevices(devices().map((device) => (device.id === id ? { ...device, ...patch } : device)));
+  async updateDevice(id: string, patch: Partial<DeviceInventoryItem>) {
+    const existing = devices().find((device) => device.id === id);
+    const item = await DevicesAPI.updateDevice(id, { ...existing, ...patch, id });
+    setDevices(devices().map((device) => (device.id === id ? item : device)));
   },
-  removeDevice(id: string) {
-    saveDevices(devices().filter((device) => device.id !== id));
+  async removeDevice(id: string) {
+    await DevicesAPI.deleteDevice(id);
+    setDevices(devices().filter((device) => device.id !== id));
   },
-  simulatePoll(id: string) {
-    saveDevices(
-      devices().map((device) => {
-        if (device.id !== id) return device;
-        const account = accounts().find((item) => item.id === device.accountId);
-        if (!account?.enabled) return device;
-        const latency = 4 + Math.round(Math.random() * (device.accountType === 'ping' ? 24 : 14));
-        const warning = Math.random() > 0.92;
-        return {
-          ...device,
-          status: warning ? 'warning' : 'online',
-          latencyMs: latency,
-          packetLoss: warning ? 1 : 0,
-          cpuUsage: device.accountType === 'ping' ? undefined : 8 + Math.round(Math.random() * 42),
-          memoryUsage: device.accountType === 'ping' ? undefined : 18 + Math.round(Math.random() * 52),
-          uptime: device.uptime || 'just now',
-          lastSeen: nowIso(),
-          lastCheckedAt: nowIso(),
-        };
-      }),
-    );
+  async updateAlerts(patch: Partial<DeviceAlertSettings>) {
+    const next = { ...alerts(), ...patch };
+    const saved = await DevicesAPI.updateAlerts(next);
+    setAlerts({ ...defaultAlerts(), ...saved });
   },
-  pollDueDevices() {
-    const now = Date.now();
-    devices().forEach((device) => {
-      const account = accounts().find((item) => item.id === device.accountId);
-      if (!account?.enabled) return;
-      const last = device.lastCheckedAt ? new Date(device.lastCheckedAt).getTime() : 0;
-      if (now - last >= account.intervalSeconds * 1000) {
-        this.simulatePoll(device.id);
-      }
-    });
+  async pollDueDevices(force = false) {
+    if (!force) {
+      const now = Date.now();
+      const due = devices().some((device) => {
+        const check = accounts().find((item) => item.id === device.accountId);
+        if (!check?.enabled) return false;
+        const last = device.lastCheckedAt ? new Date(device.lastCheckedAt).getTime() : 0;
+        return now - last >= check.intervalSeconds * 1000;
+      });
+      if (!due) return;
+    }
+    const state = await DevicesAPI.pollNow();
+    applyState(state);
   },
 };

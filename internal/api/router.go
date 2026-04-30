@@ -77,6 +77,7 @@ type Router struct {
 	licenseHandlers           *LicenseHandlers
 	logHandlers               *LogHandlers
 	agentExecServer           *agentexec.Server
+	deviceStore               *devicesStore
 	wsHub                     *websocket.Hub
 	reloadFunc                func() error
 	updateManager             *updates.Manager
@@ -174,6 +175,7 @@ func NewRouter(cfg *config.Config, monitor *monitoring.Monitor, mtMonitor *monit
 		downloadLimiter: NewRateLimiter(60, 1*time.Minute), // downloads/installers per minute per IP
 		persistence:     config.NewConfigPersistence(cfg.DataPath),
 		multiTenant:     mtPersistence,
+		deviceStore:     newDevicesStore(cfg.DataPath),
 		authorizer:      auth.GetAuthorizer(),
 		serverVersion:   strings.TrimSpace(serverVersion),
 		projectRoot:     projectRoot,
@@ -217,6 +219,7 @@ func NewRouter(cfg *config.Config, monitor *monitoring.Monitor, mtMonitor *monit
 	if !runningUnderGoTest() {
 		go r.forwardUpdateProgress()
 		go r.backgroundUpdateChecker()
+		go r.deviceStore.runPoller()
 	}
 
 	// Load system settings once at startup and cache them
@@ -387,6 +390,14 @@ func (r *Router) setupRoutes() {
 	r.mux.HandleFunc("/api/resources/", RequireAuth(r.config, RequireScope(config.ScopeMonitoringRead, r.resourceHandlers.HandleGetResource)))
 
 	// Devices collection helpers
+	r.mux.HandleFunc("/api/devices/state", r.requireDeviceScope(r.handleDevicesState))
+	r.mux.HandleFunc("/api/devices/checks", r.requireDeviceScope(r.handleDeviceChecks))
+	r.mux.HandleFunc("/api/devices/checks/", r.requireDeviceScope(r.handleDeviceCheck))
+	r.mux.HandleFunc("/api/devices/inventory", r.requireDeviceScope(r.handleManagedDevices))
+	r.mux.HandleFunc("/api/devices/inventory/", r.requireDeviceScope(r.handleManagedDevice))
+	r.mux.HandleFunc("/api/devices/alerts", r.requireDeviceScope(r.handleDevicesAlerts))
+	r.mux.HandleFunc("/api/devices/poll", r.requireDeviceScope(r.handleDevicesPoll))
+	r.mux.HandleFunc("/api/devices/unifi/discover", RequireAdmin(r.config, RequireScope(config.ScopeSettingsRead, r.handleUniFiDiscover)))
 	r.mux.HandleFunc("/api/devices/unifi/proxy", RequireAdmin(r.config, RequireScope(config.ScopeSettingsRead, r.handleUniFiProxy)))
 
 	// Guest metadata routes

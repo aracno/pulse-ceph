@@ -5,7 +5,7 @@ import {
   type DeviceAccountType,
   type DeviceInventoryItem,
 } from '@/stores/devicesMonitoring';
-import { apiFetchJSON } from '@/utils/apiClient';
+import { DevicesAPI } from '@/api/devices';
 import Activity from 'lucide-solid/icons/activity';
 import AlertTriangle from 'lucide-solid/icons/alert-triangle';
 import CheckCircle2 from 'lucide-solid/icons/check-circle-2';
@@ -64,67 +64,6 @@ const formatLastSeen = (value?: string) => {
   return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 };
 
-interface UnifiDeviceResult {
-  id: string;
-  name: string;
-  host: string;
-  type: DeviceInventoryItem['type'];
-  vendor: string;
-  model?: string;
-  site?: string;
-  firmwareVersion?: string;
-  status?: string;
-  raw: Record<string, unknown>;
-}
-
-const asString = (...values: unknown[]) => {
-  for (const value of values) {
-    if (typeof value === 'string' && value.trim()) return value.trim();
-    if (typeof value === 'number') return String(value);
-  }
-  return '';
-};
-
-const mapUnifiType = (rawType: string): DeviceInventoryItem['type'] => {
-  const normalized = rawType.toLowerCase();
-  if (normalized.includes('switch') || normalized === 'usw') return 'switch';
-  if (normalized.includes('gateway') || normalized.includes('router') || normalized === 'ugw') return 'gateway';
-  if (normalized.includes('access') || normalized.includes('ap') || normalized === 'uap') return 'access_point';
-  if (normalized.includes('console') || normalized.includes('cloud')) return 'controller';
-  return 'other';
-};
-
-const normalizeUnifiDevices = (payload: unknown): UnifiDeviceResult[] => {
-  const root = payload as { data?: unknown; devices?: unknown };
-  const list = Array.isArray(root?.data)
-    ? root.data
-    : Array.isArray(root?.devices)
-      ? root.devices
-      : Array.isArray(payload)
-        ? payload
-        : [];
-
-  return list
-    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-    .map((item, index) => {
-      const site = item.site && typeof item.site === 'object' ? (item.site as Record<string, unknown>) : undefined;
-      const type = asString(item.type, item.category, item.deviceType, item.productLine);
-      const host = asString(item.ipAddress, item.ip, item.host, item.mac, item.id, item._id);
-      return {
-        id: asString(item.id, item._id, item.mac, host, index),
-        name: asString(item.name, item.displayName, item.hostname, item.alias, item.mac, `UniFi device ${index + 1}`),
-        host,
-        type: mapUnifiType(type),
-        vendor: 'Ubiquiti',
-        model: asString(item.model, item.modelName, item.shortname, item.productName),
-        site: asString(item.siteName, item.siteId, site?.name, site?.id),
-        firmwareVersion: asString(item.version, item.firmwareVersion, item.firmware),
-        status: asString(item.status, item.state, item.online),
-        raw: item,
-      };
-    });
-};
-
 export const Devices: Component = () => {
   const navigate = useNavigate();
   const [wizardOpen, setWizardOpen] = createSignal(false);
@@ -139,7 +78,7 @@ export const Devices: Component = () => {
   const [deviceNotes, setDeviceNotes] = createSignal('');
   const [unifiLoading, setUnifiLoading] = createSignal(false);
   const [unifiError, setUnifiError] = createSignal('');
-  const [unifiDevices, setUnifiDevices] = createSignal<UnifiDeviceResult[]>([]);
+  const [unifiDevices, setUnifiDevices] = createSignal<DeviceInventoryItem[]>([]);
 
   const accounts = createMemo(() => devicesMonitoringStore.accounts().filter((account) => account.enabled));
   const devices = devicesMonitoringStore.devices;
@@ -179,10 +118,10 @@ export const Devices: Component = () => {
     setWizardOpen(true);
   };
 
-  const addDevice = () => {
+  const addDevice = async () => {
     const account = selectedAccount();
     if (!account || !deviceName().trim() || !deviceHost().trim()) return;
-    const created = devicesMonitoringStore.addDevice({
+    await devicesMonitoringStore.addDevice({
       accountId: account.id,
       accountType: account.type,
       name: deviceName().trim(),
@@ -193,30 +132,21 @@ export const Devices: Component = () => {
       site: deviceSite().trim() || account.siteFilter || undefined,
       notes: deviceNotes().trim() || undefined,
     });
-    devicesMonitoringStore.simulatePoll(created.id);
+    void devicesMonitoringStore.pollDueDevices(true);
     setWizardOpen(false);
   };
 
   const fetchUnifiDevices = async (accountId = selectedAccountId()) => {
     const account = devicesMonitoringStore.accounts().find((item) => item.id === accountId);
     if (!account || account.type !== 'unifi') return [];
-    if (!account.apiKey) {
-      setUnifiError('This UniFi check has no API key. Add or update the check in Settings first.');
-      return [];
-    }
-
     setUnifiLoading(true);
     setUnifiError('');
     try {
-      const payload = await apiFetchJSON<unknown>('/api/devices/unifi/proxy', {
-        method: 'POST',
-        body: JSON.stringify({
-          baseUrl: account.host || 'https://api.ui.com',
-          endpoint: '/v1/devices',
-          apiKey: account.apiKey,
-        }),
+      const payload = await DevicesAPI.discoverUniFi({
+        checkId: account.id,
+        baseUrl: account.host || 'https://api.ui.com',
       });
-      const devices = normalizeUnifiDevices(payload);
+      const devices = payload.devices || [];
       setUnifiDevices(devices);
       if (devices.length === 0) {
         setUnifiError('The UniFi API answered, but no devices were returned for this key.');
@@ -234,64 +164,20 @@ export const Devices: Component = () => {
     }
   };
 
-  const selectUnifiDevice = (device: UnifiDeviceResult) => {
+  const selectUnifiDevice = (device: DeviceInventoryItem) => {
     setDeviceName(device.name);
     setDeviceHost(device.host || device.id);
     setDeviceType(device.type);
-    setDeviceVendor(device.vendor);
+    setDeviceVendor(device.vendor || '');
     setDeviceModel(device.model || '');
     setDeviceSite(device.site || '');
     setDeviceNotes(device.firmwareVersion ? `Firmware ${device.firmwareVersion}` : '');
   };
 
-  const runScheduledChecks = async () => {
-    const now = Date.now();
-    const checksById = new Map(devicesMonitoringStore.accounts().map((check) => [check.id, check]));
-    const uniFiCache = new Map<string, UnifiDeviceResult[]>();
-
-    for (const device of devices()) {
-      const check = checksById.get(device.accountId);
-      if (!check?.enabled) continue;
-      const last = device.lastCheckedAt ? new Date(device.lastCheckedAt).getTime() : 0;
-      if (now - last < check.intervalSeconds * 1000) continue;
-
-      if (check.type === 'unifi' && check.apiKey) {
-        let discovered = uniFiCache.get(check.id);
-        if (!discovered) {
-          discovered = await fetchUnifiDevices(check.id);
-          uniFiCache.set(check.id, discovered);
-        }
-        const match = discovered.find(
-          (item) =>
-            item.id === device.host ||
-            item.host === device.host ||
-            item.name.toLowerCase() === device.name.toLowerCase(),
-        );
-        if (match) {
-          devicesMonitoringStore.updateDevice(device.id, {
-            status: String(match.status || '').toLowerCase().includes('offline') ? 'offline' : 'online',
-            model: match.model || device.model,
-            site: match.site || device.site,
-            firmwareVersion: match.firmwareVersion || device.firmwareVersion,
-            lastSeen: new Date().toISOString(),
-            lastCheckedAt: new Date().toISOString(),
-          });
-        } else {
-          devicesMonitoringStore.updateDevice(device.id, {
-            status: 'warning',
-            lastCheckedAt: new Date().toISOString(),
-          });
-        }
-      } else {
-        devicesMonitoringStore.simulatePoll(device.id);
-      }
-    }
-  };
-
   onMount(() => {
-    void runScheduledChecks();
+    void devicesMonitoringStore.initialize().then(() => devicesMonitoringStore.pollDueDevices(true));
     const interval = window.setInterval(() => {
-      void runScheduledChecks();
+      void devicesMonitoringStore.pollDueDevices();
     }, 5000);
     onCleanup(() => window.clearInterval(interval));
   });
@@ -394,14 +280,14 @@ export const Devices: Component = () => {
                         <div class="text-xs text-gray-500 dark:text-gray-400">Seen {formatLastSeen(device.lastSeen)}</div>
                         <button
                           type="button"
-                          onClick={() => devicesMonitoringStore.simulatePoll(device.id)}
+                          onClick={() => devicesMonitoringStore.pollDueDevices(true)}
                           class="rounded px-2 py-1 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-900/20"
                         >
                           Check
                         </button>
                         <button
                           type="button"
-                          onClick={() => devicesMonitoringStore.removeDevice(device.id)}
+                          onClick={() => void devicesMonitoringStore.removeDevice(device.id)}
                           class="rounded p-1.5 text-red-600 transition-colors hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-900/20"
                           title="Remove device"
                         >

@@ -671,7 +671,7 @@ const Settings: Component<SettingsProps> = (props) => {
   const [newDeviceAccountNotes, setNewDeviceAccountNotes] = createSignal('');
   const [editingDeviceCheckId, setEditingDeviceCheckId] = createSignal<string | null>(null);
 
-  const addDeviceAccount = () => {
+  const addDeviceAccount = async () => {
     const type = newDeviceAccountType();
     const selectedProfile = UNIFI_API_PROFILES.find((profile) => profile.id === newDeviceAccountApiProfile());
     const patch = {
@@ -695,10 +695,10 @@ const Settings: Component<SettingsProps> = (props) => {
 
     const editingId = editingDeviceCheckId();
     if (editingId) {
-      devicesMonitoringStore.updateAccount(editingId, patch);
+      await devicesMonitoringStore.updateAccount(editingId, patch);
       notificationStore.success(`${patch.name || 'Device'} check updated`, 2000);
     } else {
-      const account = devicesMonitoringStore.addAccount(patch);
+      const account = await devicesMonitoringStore.addAccount(patch);
       notificationStore.success(`${account.name} check added`, 2000);
     }
 
@@ -719,7 +719,7 @@ const Settings: Component<SettingsProps> = (props) => {
     setNewDeviceAccountName(check.name);
     setNewDeviceAccountHost(check.host || '');
     setNewDeviceAccountApiProfile(check.apiProfile || UNIFI_API_PROFILES[0].id);
-    setNewDeviceAccountSecret(check.apiKey || check.credential || '');
+    setNewDeviceAccountSecret('');
     setNewDeviceAccountSiteFilter(check.siteFilter || '');
     setNewDeviceAccountInterval(check.intervalSeconds);
     setNewDeviceAccountNotes(check.notes || '');
@@ -1142,6 +1142,7 @@ const Settings: Component<SettingsProps> = (props) => {
     loadNodes();
     loadDiscoveredNodes();
     loadSecurityStatus();
+    void devicesMonitoringStore.initialize();
     runDiagnostics();
   });
 
@@ -3554,7 +3555,7 @@ const Settings: Component<SettingsProps> = (props) => {
                               autocomplete="off"
                             />
                             <span class={formHelpText}>
-                              Used by the browser-side check now; backend secret storage is the next step.
+                              Stored by the backend and used by scheduled checks. Leave blank while editing to keep the saved secret.
                             </span>
                           </label>
                         </Show>
@@ -3630,7 +3631,7 @@ const Settings: Component<SettingsProps> = (props) => {
                               <Toggle
                                 checked={account.enabled}
                                 onChange={(event) =>
-                                  devicesMonitoringStore.updateAccount(account.id, {
+                                  void devicesMonitoringStore.updateAccount(account.id, {
                                     enabled: event.currentTarget.checked,
                                   })
                                 }
@@ -3647,7 +3648,7 @@ const Settings: Component<SettingsProps> = (props) => {
                               <button
                                 type="button"
                                 disabled={account.id === 'account-ping-default'}
-                                onClick={() => devicesMonitoringStore.removeAccount(account.id)}
+                                onClick={() => void devicesMonitoringStore.removeAccount(account.id)}
                                 class="rounded px-2 py-1 text-xs text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:text-gray-400 dark:text-red-300 dark:hover:bg-red-900/20 dark:disabled:text-gray-600"
                               >
                                 Remove
