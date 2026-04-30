@@ -1885,9 +1885,6 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
     return resources;
   }, []);
 
-  const cephResourceForCluster = (clusterId: string) =>
-    cephClustersWithOverrides().filter((cluster) => cluster.id === clusterId);
-
   const cephOSDsForCluster = (clusterId: string) =>
     cephOSDsWithOverrides().filter((osd) => osd.id.startsWith(`${clusterId}:osd:`));
 
@@ -3624,7 +3621,6 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
                         props.overrides().find((item) => item.id === cluster.id);
                       const clusterDisabled = () =>
                         props.disableAllCeph() || Boolean(override()?.disabled);
-                      const clusterResource = () => cephResourceForCluster(cluster.id);
                       const osdResources = () => cephOSDsForCluster(cluster.id);
                       const osdOverrideCount = () =>
                         osdResources().filter((osd) => osd.disabled || osd.hasOverride).length;
@@ -3663,8 +3659,22 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
                           <div class="border-b border-gray-200 bg-white px-4 py-3 dark:border-gray-700 dark:bg-gray-900/70">
                             <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                               <div class="min-w-0">
-                                <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                                  {cluster.name || cluster.instance || 'Ceph'}
+                                <div class="flex flex-wrap items-center gap-3">
+                                  <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                                    {cluster.name || cluster.instance || 'Ceph'}
+                                  </div>
+                                  <Toggle
+                                    size="sm"
+                                    checked={!clusterDisabled()}
+                                    disabled={props.disableAllCeph()}
+                                    onToggle={() => toggleDisabled(cluster.id)}
+                                    title={
+                                      clusterDisabled()
+                                        ? 'Enable all alerts for this Ceph cluster'
+                                        : 'Disable all alerts for this Ceph cluster'
+                                    }
+                                    ariaLabel="Toggle all Ceph cluster alerts"
+                                  />
                                 </div>
                                 <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
                                   <span class="rounded border border-gray-200 bg-gray-50 px-2 py-0.5 font-medium text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
@@ -3718,39 +3728,6 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
                                   'Enable inconsistent PG alerts',
                                 )}
                               </div>
-                            </section>
-
-                            <section>
-                              <div class="mb-2">
-                                <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                                  Cluster Override
-                                </h4>
-                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                  Master switch for this Ceph cluster
-                                </p>
-                              </div>
-                              <ResourceTable
-                                title=""
-                                resources={clusterResource()}
-                                columns={[]}
-                                activeAlerts={props.activeAlerts}
-                                emptyMessage="No Ceph clusters match the current filters."
-                                onEdit={startEditing}
-                                onSaveEdit={saveEdit}
-                                onCancelEdit={cancelEdit}
-                                onRemoveOverride={removeOverride}
-                                onToggleDisabled={toggleDisabled}
-                                showOfflineAlertsColumn={false}
-                                editingId={editingId}
-                                editingThresholds={editingThresholds}
-                                setEditingThresholds={setEditingThresholds}
-                                editingNote={editingNote}
-                                setEditingNote={setEditingNote}
-                                formatMetricValue={formatMetricValue}
-                                hasActiveAlert={hasActiveAlert}
-                                setHasUnsavedChanges={props.setHasUnsavedChanges}
-                                globalDisableFlag={props.disableAllCeph}
-                              />
                             </section>
 
                             <section>
