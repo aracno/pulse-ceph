@@ -3520,6 +3520,7 @@ func (m *Monitor) ApplyHostReport(report agentshost.Report, tokenRecord *config.
 			Devices:        devices,
 			RebuildPercent: array.RebuildPercent,
 			RebuildSpeed:   array.RebuildSpeed,
+			Operation:      array.Operation,
 		})
 	}
 

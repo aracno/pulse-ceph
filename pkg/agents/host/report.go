@@ -150,6 +150,13 @@ type RAIDArray struct {
 	Devices        []RAIDDevice `json:"devices"`                // Individual devices in array
 	RebuildPercent float64      `json:"rebuildPercent"`         // Rebuild/resync progress (0-100)
 	RebuildSpeed   string       `json:"rebuildSpeed,omitempty"` // Rebuild speed (e.g., "50000K/sec")
+	// Operation reports the in-progress sync action from /proc/mdstat:
+	// "recovery" (rebuilding after disk replacement), "resync" (resync after
+	// unclean shutdown or routine maintenance), or "check" (data scrub).
+	// Empty string when the array is idle. Used by the alert layer to
+	// distinguish a true rebuild from routine maintenance like a Synology
+	// data scrub.
+	Operation string `json:"operation,omitempty"`
 }
 
 // RAIDDevice represents a single device in a RAID array.

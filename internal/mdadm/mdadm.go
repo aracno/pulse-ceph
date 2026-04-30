@@ -14,10 +14,17 @@ import (
 
 // Pre-compiled regexes for performance (avoid recompilation on each call)
 var (
-	mdDeviceRe       = regexp.MustCompile(`^(md\d+)\s*:`)
-	slotRe           = regexp.MustCompile(`^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s+(/dev/.+)$`)
-	speedRe          = regexp.MustCompile(`speed=(\S+)`)
-	runCommandOutput = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	mdDeviceRe = regexp.MustCompile(`^(md\d+)\s*:`)
+	slotRe     = regexp.MustCompile(`^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s+(/dev/.+)$`)
+	speedRe    = regexp.MustCompile(`speed=(\S+)`)
+	// /proc/mdstat progress line keys.
+	// Example: "[==>..................]  check = 12.6% (...) finish=... speed=..."
+	// "recovery" indicates rebuilding after a disk replacement; "resync"
+	// indicates resync after unclean shutdown or routine maintenance;
+	// "check" indicates a data scrub. Reshape can also appear during
+	// level/geometry changes.
+	mdstatOperationRe = regexp.MustCompile(`(?i)\b(recovery|resync|check|reshape)\b\s*=`)
+	runCommandOutput  = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		cmd := exec.CommandContext(ctx, name, args...)
 		return cmd.Output()
 	}
@@ -203,19 +210,27 @@ func parseDetail(device, output string) (host.RAIDArray, error) {
 		}
 	}
 
-	// Check for rebuild/resync info in /proc/mdstat for speed information
-	if array.RebuildPercent > 0 {
-		speed := getRebuildSpeed(device)
-		if speed != "" {
-			array.RebuildSpeed = speed
-		}
+	// Look up the in-progress sync action and its speed from /proc/mdstat.
+	// mdadm --detail does not always advertise scrub state via "State:" on
+	// every kernel/distribution combination (notably Synology DSM), so the
+	// progress line is the authoritative source for distinguishing a
+	// rebuild from a routine scrub.
+	operation, speed := getMdstatProgress(device)
+	if operation != "" {
+		array.Operation = operation
+	}
+	if speed != "" {
+		array.RebuildSpeed = speed
 	}
 
 	return array, nil
 }
 
-// getRebuildSpeed extracts rebuild speed from /proc/mdstat
-func getRebuildSpeed(device string) string {
+// getMdstatProgress parses /proc/mdstat for the named device and returns the
+// in-progress sync action ("recovery", "resync", "check", or "reshape") and
+// the reported speed. Returns empty strings when the array is idle or the
+// progress line is not present.
+func getMdstatProgress(device string) (operation, speed string) {
 	// Remove /dev/ prefix for /proc/mdstat lookup
 	deviceName := strings.TrimPrefix(device, "/dev/")
 
@@ -224,37 +239,44 @@ func getRebuildSpeed(device string) string {
 
 	output, err := runCommandOutput(ctx, "cat", "/proc/mdstat")
 	if err != nil {
-		return ""
+		return "", ""
 	}
 
-	// Look for lines containing rebuild/resync speed
-	// Example: [==>..................]  recovery = 12.6% (37043392/293039104) finish=127.5min speed=33440K/sec
+	// Example progress line shapes:
+	//   [==>..................]  recovery = 12.6% (...) finish=... speed=33440K/sec
+	//   [=>...................]  resync = 5.0% (...) finish=... speed=...
+	//   [==>..................]  check = 12.6% (...) finish=... speed=...
 	lines := strings.Split(string(output), "\n")
 	inSection := false
 
 	for _, line := range lines {
-		// Check if this is our device
 		if strings.HasPrefix(strings.TrimSpace(line), deviceName) {
 			inSection = true
 			continue
 		}
 
-		// If we're in the right section, look for speed info
-		if inSection {
-			if strings.Contains(line, "speed=") {
-				// Extract speed value using pre-compiled regex
-				matches := speedRe.FindStringSubmatch(line)
-				if len(matches) > 1 {
-					return matches[1]
-				}
-			}
+		if !inSection {
+			continue
+		}
 
-			// Exit section when we hit a new device or blank line
-			if strings.TrimSpace(line) == "" || (strings.HasPrefix(strings.TrimSpace(line), "md") && strings.Contains(line, ":")) {
-				break
+		if strings.TrimSpace(line) == "" || (strings.HasPrefix(strings.TrimSpace(line), "md") && strings.Contains(line, ":")) {
+			break
+		}
+
+		if operation == "" {
+			if matches := mdstatOperationRe.FindStringSubmatch(line); len(matches) > 1 {
+				operation = strings.ToLower(matches[1])
 			}
+		}
+		if speed == "" {
+			if matches := speedRe.FindStringSubmatch(line); len(matches) > 1 {
+				speed = matches[1]
+			}
+		}
+		if operation != "" && speed != "" {
+			break
 		}
 	}
 
-	return ""
+	return operation, speed
 }

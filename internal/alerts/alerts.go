@@ -3260,17 +3260,29 @@ func (m *Manager) CheckHost(host models.Host) {
 			if array.RebuildPercent > 0 {
 				raidMetadata["raidRebuildPercent"] = array.RebuildPercent
 			}
+			if array.Operation != "" {
+				raidMetadata["raidOperation"] = array.Operation
+			}
 
 			// Check for degraded or failed arrays
 			stateLower := strings.ToLower(array.State)
 			isDegraded := strings.Contains(stateLower, "degraded") || array.FailedDevices > 0
 
-			// A "check" state indicates data scrubbing (e.g., DSM scheduled scrub), not a rebuild.
-			// Only treat as rebuilding if state indicates actual recovery, not routine maintenance.
-			isChecking := strings.Contains(stateLower, "check")
-			isRebuilding := !isChecking && (strings.Contains(stateLower, "recover") ||
-				strings.Contains(stateLower, "resync") ||
-				(array.RebuildPercent > 0 && !strings.Contains(stateLower, "clean")))
+			// Distinguish a true rebuild from routine maintenance (data scrub
+			// or resync after unclean shutdown). The /proc/mdstat operation
+			// type is the authoritative signal: "recovery" means a real
+			// rebuild after a disk replacement, while "check" and "resync"
+			// are maintenance the user does not need to be alerted about.
+			// Some kernels (notably Synology DSM) do not surface scrub state
+			// in mdadm --detail State, so falling back to substring matching
+			// of State is unreliable; the State checks below are kept only
+			// as a backstop for arrays with no /proc/mdstat progress line.
+			operation := strings.ToLower(array.Operation)
+			isMaintenance := operation == "check" || operation == "resync"
+			isRebuilding := !isMaintenance && (operation == "recovery" ||
+				operation == "reshape" ||
+				(operation == "" && (strings.Contains(stateLower, "recover") ||
+					(array.RebuildPercent > 0 && !strings.Contains(stateLower, "clean") && !strings.Contains(stateLower, "check")))))
 
 			alertID := fmt.Sprintf("host-%s-raid-%s", host.ID, sanitizeRAIDDevice(array.Device))
 

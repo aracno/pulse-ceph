@@ -382,6 +382,7 @@ func FromHost(h models.Host) Resource {
 			Devices:        devices,
 			RebuildPercent: r.RebuildPercent,
 			RebuildSpeed:   r.RebuildSpeed,
+			Operation:      r.Operation,
 		}
 	}
 

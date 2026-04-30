@@ -15073,8 +15073,9 @@ func TestCheckHostComprehensive(t *testing.T) {
 		}
 	})
 
-	t.Run("RAID resync triggers rebuilding alert", func(t *testing.T) {
-		// t.Parallel()
+	t.Run("RAID recovery operation triggers rebuilding alert", func(t *testing.T) {
+		// /proc/mdstat reports operation=recovery — a real rebuild after
+		// disk replacement. Alert.
 		m := newTestManager(t)
 
 		host := models.Host{
@@ -15082,9 +15083,10 @@ func TestCheckHostComprehensive(t *testing.T) {
 			Hostname: "testhost",
 			RAID: []models.HostRAIDArray{
 				{
-					Device:        "/dev/md2", // Note: md0/md1 are skipped for Synology compatibility
+					Device:        "/dev/md2",
 					Level:         "raid1",
-					State:         "resync",
+					State:         "active, recovering",
+					Operation:     "recovery",
 					TotalDevices:  2,
 					ActiveDevices: 2,
 					FailedDevices: 0,
@@ -15099,10 +15101,75 @@ func TestCheckHostComprehensive(t *testing.T) {
 		m.mu.RUnlock()
 
 		if alert == nil {
-			t.Fatal("expected RAID rebuilding alert for resync")
+			t.Fatal("expected RAID rebuilding alert for recovery operation")
 		}
 		if alert.Level != AlertLevelWarning {
-			t.Errorf("expected warning level for resync, got %s", alert.Level)
+			t.Errorf("expected warning level for recovery, got %s", alert.Level)
+		}
+	})
+
+	t.Run("RAID check operation does not trigger alert (Synology scrub)", func(t *testing.T) {
+		// /proc/mdstat reports operation=check — a routine data scrub
+		// (e.g. Synology DSM scheduled task). Must not alert (#1446).
+		m := newTestManager(t)
+
+		host := models.Host{
+			ID:       "host1",
+			Hostname: "testhost",
+			RAID: []models.HostRAIDArray{
+				{
+					Device:        "/dev/md2",
+					Level:         "raid5",
+					State:         "active",
+					Operation:     "check",
+					TotalDevices:  3,
+					ActiveDevices: 3,
+					FailedDevices: 0,
+				},
+			},
+		}
+
+		m.CheckHost(host)
+
+		m.mu.RLock()
+		alert := m.activeAlerts["host-host1-raid-md2"]
+		m.mu.RUnlock()
+
+		if alert != nil {
+			t.Fatalf("expected no alert for scrub (check) operation, got %s level=%s", alert.Message, alert.Level)
+		}
+	})
+
+	t.Run("RAID resync operation does not trigger alert (maintenance resync)", func(t *testing.T) {
+		// /proc/mdstat reports operation=resync — resync after unclean
+		// shutdown or routine maintenance. Synology surfaces scrubs as
+		// resync on some kernels; do not alert (#1446).
+		m := newTestManager(t)
+
+		host := models.Host{
+			ID:       "host1",
+			Hostname: "testhost",
+			RAID: []models.HostRAIDArray{
+				{
+					Device:        "/dev/md2",
+					Level:         "raid1",
+					State:         "active, resyncing",
+					Operation:     "resync",
+					TotalDevices:  2,
+					ActiveDevices: 2,
+					FailedDevices: 0,
+				},
+			},
+		}
+
+		m.CheckHost(host)
+
+		m.mu.RLock()
+		alert := m.activeAlerts["host-host1-raid-md2"]
+		m.mu.RUnlock()
+
+		if alert != nil {
+			t.Fatalf("expected no alert for resync operation, got %s level=%s", alert.Message, alert.Level)
 		}
 	})
 
