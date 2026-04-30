@@ -80,12 +80,24 @@ type ManagerMap struct {
 
 // OSDMap represents OSD status summary.
 type OSDMap struct {
-	Epoch   int `json:"epoch"`
-	NumOSDs int `json:"numOsds"`
-	NumUp   int `json:"numUp"`
-	NumIn   int `json:"numIn"`
-	NumDown int `json:"numDown,omitempty"`
-	NumOut  int `json:"numOut,omitempty"`
+	Epoch   int   `json:"epoch"`
+	NumOSDs int   `json:"numOsds"`
+	NumUp   int   `json:"numUp"`
+	NumIn   int   `json:"numIn"`
+	NumDown int   `json:"numDown,omitempty"`
+	NumOut  int   `json:"numOut,omitempty"`
+	OSDs    []OSD `json:"osds,omitempty"`
+}
+
+// OSD represents a single Ceph OSD.
+type OSD struct {
+	ID     int      `json:"id"`
+	Name   string   `json:"name"`
+	Host   string   `json:"host,omitempty"`
+	Up     bool     `json:"up"`
+	In     bool     `json:"in"`
+	State  []string `json:"state,omitempty"`
+	Weight float64  `json:"weight,omitempty"`
 }
 
 // PGMap represents placement group statistics.
@@ -230,6 +242,15 @@ func parseStatus(data []byte) (*ClusterStatus, error) {
 			NumOSD int `json:"num_osds"`
 			NumUp  int `json:"num_up_osds"`
 			NumIn  int `json:"num_in_osds"`
+			OSDs   []struct {
+				OSD    int      `json:"osd"`
+				Name   string   `json:"name"`
+				Host   string   `json:"host"`
+				Up     int      `json:"up"`
+				In     int      `json:"in"`
+				State  []string `json:"state"`
+				Weight float64  `json:"weight"`
+			} `json:"osds"`
 		} `json:"osdmap"`
 		PGMap struct {
 			NumPGs           int     `json:"num_pgs"`
@@ -307,6 +328,23 @@ func parseStatus(data []byte) (*ClusterStatus, error) {
 		managerCount = mgrService.Total
 	}
 
+	osds := make([]OSD, 0, len(raw.OSDMap.OSDs))
+	for _, osd := range raw.OSDMap.OSDs {
+		name := strings.TrimSpace(osd.Name)
+		if name == "" {
+			name = fmt.Sprintf("osd.%d", osd.OSD)
+		}
+		osds = append(osds, OSD{
+			ID:     osd.OSD,
+			Name:   name,
+			Host:   osd.Host,
+			Up:     osd.Up == 1,
+			In:     osd.In == 1,
+			State:  append([]string(nil), osd.State...),
+			Weight: osd.Weight,
+		})
+	}
+
 	status := &ClusterStatus{
 		FSID: raw.FSID,
 		Health: HealthStatus{
@@ -331,6 +369,7 @@ func parseStatus(data []byte) (*ClusterStatus, error) {
 			NumIn:   raw.OSDMap.NumIn,
 			NumDown: raw.OSDMap.NumOSD - raw.OSDMap.NumUp,
 			NumOut:  raw.OSDMap.NumOSD - raw.OSDMap.NumIn,
+			OSDs:    osds,
 		},
 		PGMap: PGMap{
 			NumPGs:           raw.PGMap.NumPGs,

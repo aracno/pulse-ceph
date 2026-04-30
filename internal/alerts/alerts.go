@@ -5635,10 +5635,17 @@ func (m *Manager) checkCephHealth(cluster models.CephCluster, resourceID, resour
 }
 
 func (m *Manager) checkCephOSDState(cluster models.CephCluster, resourceID, resourceName string, osdOverrides map[string]ThresholdConfig) {
-	if len(cluster.OSDs) > 0 {
+	detailedOSDs := make([]models.CephOSD, 0, len(cluster.OSDs))
+	for _, osd := range cluster.OSDs {
+		if !osd.Synthetic {
+			detailedOSDs = append(detailedOSDs, osd)
+		}
+	}
+
+	if len(detailedOSDs) > 0 {
 		m.clearAlert(fmt.Sprintf("%s-ceph-osd-state", resourceID))
-		validAlertIDs := make(map[string]struct{}, len(cluster.OSDs))
-		for _, osd := range cluster.OSDs {
+		validAlertIDs := make(map[string]struct{}, len(detailedOSDs))
+		for _, osd := range detailedOSDs {
 			osdResourceID := cephOSDResourceID(resourceID, osd.ID)
 			alertID := fmt.Sprintf("%s-state", osdResourceID)
 			validAlertIDs[alertID] = struct{}{}

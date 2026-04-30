@@ -346,12 +346,24 @@ type HostCephManagerMap struct {
 
 // HostCephOSDMap represents OSD status summary.
 type HostCephOSDMap struct {
-	Epoch   int `json:"epoch"`
-	NumOSDs int `json:"numOsds"`
-	NumUp   int `json:"numUp"`
-	NumIn   int `json:"numIn"`
-	NumDown int `json:"numDown,omitempty"`
-	NumOut  int `json:"numOut,omitempty"`
+	Epoch   int           `json:"epoch"`
+	NumOSDs int           `json:"numOsds"`
+	NumUp   int           `json:"numUp"`
+	NumIn   int           `json:"numIn"`
+	NumDown int           `json:"numDown,omitempty"`
+	NumOut  int           `json:"numOut,omitempty"`
+	OSDs    []HostCephOSD `json:"osds,omitempty"`
+}
+
+// HostCephOSD represents a single OSD collected by the host agent.
+type HostCephOSD struct {
+	ID     int      `json:"id"`
+	Name   string   `json:"name"`
+	Host   string   `json:"host,omitempty"`
+	Up     bool     `json:"up"`
+	In     bool     `json:"in"`
+	State  []string `json:"state,omitempty"`
+	Weight float64  `json:"weight,omitempty"`
 }
 
 // HostCephPGMap represents placement group statistics.
@@ -795,13 +807,14 @@ type CephCluster struct {
 
 // CephOSD represents the state of a single Ceph OSD.
 type CephOSD struct {
-	ID     int      `json:"id"`
-	Name   string   `json:"name"`
-	Host   string   `json:"host,omitempty"`
-	Up     bool     `json:"up"`
-	In     bool     `json:"in"`
-	State  []string `json:"state,omitempty"`
-	Weight float64  `json:"weight,omitempty"`
+	ID        int      `json:"id"`
+	Name      string   `json:"name"`
+	Host      string   `json:"host,omitempty"`
+	Up        bool     `json:"up"`
+	In        bool     `json:"in"`
+	State     []string `json:"state,omitempty"`
+	Weight    float64  `json:"weight,omitempty"`
+	Synthetic bool     `json:"synthetic,omitempty"`
 }
 
 // CephPool represents usage statistics for a Ceph pool

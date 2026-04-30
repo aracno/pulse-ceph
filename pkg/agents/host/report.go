@@ -224,12 +224,24 @@ type CephManagerMap struct {
 
 // CephOSDMap represents OSD status summary.
 type CephOSDMap struct {
-	Epoch   int `json:"epoch"`
-	NumOSDs int `json:"numOsds"`
-	NumUp   int `json:"numUp"`
-	NumIn   int `json:"numIn"`
-	NumDown int `json:"numDown,omitempty"`
-	NumOut  int `json:"numOut,omitempty"`
+	Epoch   int       `json:"epoch"`
+	NumOSDs int       `json:"numOsds"`
+	NumUp   int       `json:"numUp"`
+	NumIn   int       `json:"numIn"`
+	NumDown int       `json:"numDown,omitempty"`
+	NumOut  int       `json:"numOut,omitempty"`
+	OSDs    []CephOSD `json:"osds,omitempty"`
+}
+
+// CephOSD represents a single Ceph OSD.
+type CephOSD struct {
+	ID     int      `json:"id"`
+	Name   string   `json:"name"`
+	Host   string   `json:"host,omitempty"`
+	Up     bool     `json:"up"`
+	In     bool     `json:"in"`
+	State  []string `json:"state,omitempty"`
+	Weight float64  `json:"weight,omitempty"`
 }
 
 // CephPGMap represents placement group statistics.

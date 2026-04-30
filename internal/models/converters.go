@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -870,6 +871,17 @@ func (c CephCluster) ToFrontend() CephClusterFrontend {
 
 	if len(c.OSDs) > 0 {
 		frontend.OSDs = append([]CephOSD(nil), c.OSDs...)
+	} else if c.NumOSDs > 0 {
+		frontend.OSDs = make([]CephOSD, 0, c.NumOSDs)
+		for id := 0; id < c.NumOSDs; id++ {
+			frontend.OSDs = append(frontend.OSDs, CephOSD{
+				ID:        id,
+				Name:      fmt.Sprintf("osd.%d", id),
+				Up:        c.NumOSDsUp == c.NumOSDs,
+				In:        c.NumOSDsIn == c.NumOSDs,
+				Synthetic: true,
+			})
+		}
 	}
 
 	if len(c.Pools) > 0 {
