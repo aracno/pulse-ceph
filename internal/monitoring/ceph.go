@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -268,6 +269,69 @@ func buildCephOSDModels(status *proxmox.CephStatus) []models.CephOSD {
 	}
 
 	return osds
+}
+
+type cephNodeOSDClient interface {
+	GetNodeCephOSDs(ctx context.Context, node string) ([]proxmox.CephOSDStatus, error)
+}
+
+func enrichCephClusterOSDsFromNodes(ctx context.Context, client PVEClientInterface, nodes []proxmox.Node, cluster *models.CephCluster) {
+	osdClient, ok := client.(cephNodeOSDClient)
+	if !ok || cluster == nil || len(nodes) == 0 {
+		return
+	}
+
+	byID := make(map[int]models.CephOSD)
+	for _, osd := range cluster.OSDs {
+		byID[osd.ID] = osd
+	}
+
+	for _, node := range nodes {
+		if strings.TrimSpace(node.Node) == "" {
+			continue
+		}
+		nodeOSDs, err := osdClient.GetNodeCephOSDs(ctx, node.Node)
+		if err != nil {
+			log.Debug().Err(err).Str("node", node.Node).Msg("Failed to fetch Ceph OSDs for node")
+			continue
+		}
+		localScope := cluster.NumOSDs == 0 || len(nodeOSDs) < cluster.NumOSDs || len(nodes) == 1
+		for _, osd := range nodeOSDs {
+			name := strings.TrimSpace(osd.Name)
+			if name == "" {
+				name = fmt.Sprintf("osd.%d", osd.ID)
+			}
+			host := strings.TrimSpace(osd.Host)
+			if host == "" && localScope {
+				host = node.Node
+			}
+			candidate := models.CephOSD{
+				ID:     osd.ID,
+				Name:   name,
+				Host:   host,
+				Up:     osd.Up > 0,
+				In:     osd.In > 0,
+				State:  append([]string(nil), osd.State...),
+				Weight: osd.Weight,
+			}
+			existing, exists := byID[osd.ID]
+			if !exists || existing.Host == "" || existing.Synthetic {
+				byID[osd.ID] = candidate
+			}
+		}
+	}
+
+	if len(byID) == 0 {
+		return
+	}
+	enriched := make([]models.CephOSD, 0, len(byID))
+	for _, osd := range byID {
+		enriched = append(enriched, osd)
+	}
+	sort.Slice(enriched, func(i, j int) bool {
+		return enriched[i].ID < enriched[j].ID
+	})
+	cluster.OSDs = enriched
 }
 
 func countInconsistentPGs(status *proxmox.CephStatus) int {

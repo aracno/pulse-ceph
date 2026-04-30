@@ -2035,6 +2035,7 @@ func (m *Monitor) pollStorageWithNodes(ctx context.Context, instanceName string,
 			}
 		default:
 			cluster := buildCephClusterModel(instanceName, cephStatus, cephDF)
+			enrichCephClusterOSDsFromNodes(ctx, client, nodes, &cluster)
 			if cluster.ID == "" {
 				cluster.ID = instanceName
 			}
