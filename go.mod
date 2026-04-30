@@ -2,6 +2,8 @@ module github.com/rcourtman/pulse-go-rewrite
 
 go 1.25.0
 
+toolchain go1.25.9
+
 require (
 	github.com/IGLOU-EU/go-wildcard/v2 v2.1.0
 	github.com/coreos/go-oidc/v3 v3.17.0
@@ -98,7 +100,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
-	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
