@@ -12,8 +12,8 @@ import Archive from 'lucide-solid/icons/archive';
 import Camera from 'lucide-solid/icons/camera';
 import Mail from 'lucide-solid/icons/mail';
 import Users from 'lucide-solid/icons/users';
-import Boxes from 'lucide-solid/icons/boxes';
 import CircleDotDashed from 'lucide-solid/icons/circle-dot-dashed';
+import Network from 'lucide-solid/icons/network';
 
 // Workaround for eslint false-positive when `For` is used only in JSX
 const __ensureForUsage = For;
@@ -59,6 +59,7 @@ type OverrideType =
   | 'dockerContainer';
 
 type OfflineState = 'off' | 'warning' | 'critical';
+type ThresholdTab = 'proxmox' | 'pmg' | 'hosts' | 'docker' | 'devices';
 
 interface Override {
   id: string;
@@ -375,7 +376,7 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
     Record<string, number | undefined>
   >({});
   const [editingNote, setEditingNote] = createSignal('');
-  const [activeTab, setActiveTab] = createSignal<'proxmox' | 'pmg' | 'hosts' | 'docker'>('proxmox');
+  const [activeTab, setActiveTab] = createSignal<ThresholdTab>('proxmox');
   let searchInputRef: HTMLInputElement | undefined;
   const [dockerIgnoredInput, setDockerIgnoredInput] = createSignal(
     props.dockerIgnoredPrefixes().join('\n'),
@@ -407,8 +408,9 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
   });
 
   // Determine active tab from URL
-  const getActiveTabFromRoute = (): 'proxmox' | 'pmg' | 'hosts' | 'docker' => {
+  const getActiveTabFromRoute = (): ThresholdTab => {
     const path = location.pathname;
+    if (path.includes('/thresholds/devices')) return 'devices';
     if (path.includes('/thresholds/containers')) return 'docker';
     if (path.includes('/thresholds/docker')) return 'docker'; // Legacy support
     if (path.includes('/thresholds/hosts')) return 'hosts';
@@ -432,20 +434,26 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
   });
 
   createEffect(() => {
-    if (location.pathname.startsWith('/alerts/thresholds/docker')) {
+    if (
+      location.pathname.startsWith('/alerts/thresholds/docker') ||
+      location.pathname.startsWith('/alerts/thresholds/containers')
+    ) {
       navigate(
-        location.pathname.replace('/alerts/thresholds/docker', '/alerts/thresholds/containers'),
+        location.pathname
+          .replace('/alerts/thresholds/docker', '/alerts/thresholds/devices')
+          .replace('/alerts/thresholds/containers', '/alerts/thresholds/devices'),
         { replace: true, scroll: false },
       );
     }
   });
 
-  const handleTabClick = (tab: 'proxmox' | 'pmg' | 'hosts' | 'docker') => {
+  const handleTabClick = (tab: ThresholdTab) => {
     const tabRoutes = {
       proxmox: '/alerts/thresholds/proxmox',
       pmg: '/alerts/thresholds/mail-gateway',
       hosts: '/alerts/thresholds/hosts',
       docker: '/alerts/thresholds/containers',
+      devices: '/alerts/thresholds/devices',
     };
     navigate(tabRoutes[tab]);
   };
@@ -2985,8 +2993,6 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
         </div>
       </Show>
 
-      {props.deviceAlertsPanel}
-
       {/* Tab Navigation */}
       <div class="border-b border-gray-200 dark:border-gray-700">
         <nav class="-mb-px flex gap-4 sm:gap-6" aria-label="Tabs">
@@ -3028,14 +3034,15 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
           </button>
           <button
             type="button"
-            onClick={() => handleTabClick('docker')}
+            onClick={() => handleTabClick('devices')}
             class={`py-3 px-1 border-b-2 font-medium text-sm transition-colors cursor-pointer flex items-center gap-1.5 ${activeTab() === 'docker'
+              || activeTab() === 'devices'
               ? 'border-blue-500 text-blue-600 dark:text-blue-400'
               : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
               }`}
           >
-            <Boxes class="w-4 h-4" />
-            <span>Containers</span>
+            <Network class="w-4 h-4" />
+            <span>Devices</span>
           </button>
         </nav>
       </div>
@@ -3062,6 +3069,10 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
       </Show>
 
       <div class="space-y-6">
+        <Show when={activeTab() === 'devices'}>
+          {props.deviceAlertsPanel}
+        </Show>
+
         <Show when={activeTab() === 'proxmox'}>
           <Show when={hasSection('nodes')}>
             <CollapsibleSection

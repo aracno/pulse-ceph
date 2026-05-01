@@ -32,6 +32,8 @@ import History from 'lucide-solid/icons/history';
 import Gauge from 'lucide-solid/icons/gauge';
 import Send from 'lucide-solid/icons/send';
 import Calendar from 'lucide-solid/icons/calendar';
+import NetworkIcon from 'lucide-solid/icons/network';
+import { CollapsibleSection } from '@/components/Alerts/Thresholds/sections/CollapsibleSection';
 import {
   FACTORY_DOCKER_DEFAULTS,
   FACTORY_GUEST_DEFAULTS,
@@ -3165,19 +3167,10 @@ interface ThresholdsTabProps {
 
 function DeviceCheckAlertsPanel() {
   const alerts = devicesMonitoringStore.alerts;
-  const checks = devicesMonitoringStore.accounts;
   const devices = devicesMonitoringStore.devices;
   const summary = () => alerts().lastEvaluationSummary ?? {};
   const updateAlerts = (patch: Partial<ReturnType<typeof alerts>>) => {
     void devicesMonitoringStore.updateAlerts(patch);
-  };
-  const updateCheckOverride = (id: string, disabled: boolean) => {
-    updateAlerts({
-      checkOverrides: {
-        ...(alerts().checkOverrides ?? {}),
-        [id]: disabled,
-      },
-    });
   };
   const updateDeviceOverride = (id: string, disabled: boolean) => {
     updateAlerts({
@@ -3192,20 +3185,14 @@ function DeviceCheckAlertsPanel() {
     void devicesMonitoringStore.initialize();
   });
 
-  const enabledText = (enabled: boolean) => (enabled ? 'Enabled' : 'Disabled');
-
   return (
-    <div class="rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-      <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <h3 class="text-sm font-semibold uppercase tracking-normal text-gray-500 dark:text-gray-400">
-            Device Check Alerts
-          </h3>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Fine tune network hardware alerts from Ping, UniFi, and SNMP checks.
-          </p>
-        </div>
+    <CollapsibleSection
+      id="devices"
+      title="Devices"
+      resourceCount={devices().length}
+      icon={<NetworkIcon class="w-5 h-5" />}
+      emptyMessage="No devices in inventory."
+      headerActions={
         <div class="flex items-center gap-3">
           <span class="text-xs text-gray-500 dark:text-gray-400">
             {summary().offline ?? 0} offline / {summary().warning ?? 0} warning
@@ -3217,119 +3204,51 @@ function DeviceCheckAlertsPanel() {
             size="sm"
           />
         </div>
-      </div>
-      </div>
-
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead class="bg-gray-50 text-xs font-semibold uppercase tracking-normal text-gray-500 dark:bg-gray-900/60 dark:text-gray-400">
-            <tr>
-              <th class="w-20 px-4 py-2 text-left">Alerts</th>
-              <th class="px-4 py-2 text-left">Resource</th>
-              <th class="px-4 py-2 text-left">Type</th>
-              <th class="px-4 py-2 text-left">State</th>
-              <th class="px-4 py-2 text-left">Latency ms</th>
-              <th class="px-4 py-2 text-left">Packet loss %</th>
-              <th class="px-4 py-2 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-            <tr>
-              <td class="px-4 py-3">
-                <Toggle
-                  checked={alerts().enabled}
-                  onChange={(event) => updateAlerts({ enabled: event.currentTarget.checked })}
-                  ariaLabel="Toggle all device check alerts"
-                  size="sm"
-                />
-              </td>
-              <td class="px-4 py-3 font-semibold text-gray-900 dark:text-gray-100">Global Defaults</td>
-              <td class="px-4 py-3 text-gray-500 dark:text-gray-400">Devices</td>
-              <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{enabledText(alerts().enabled)}</td>
-              <td class="px-4 py-3">
-                <input
-                  class="h-8 w-24 rounded-md border border-gray-300 bg-gray-100 px-2 text-sm dark:border-gray-700 dark:bg-gray-700 dark:text-gray-100"
-                  type="number"
-                  min="1"
-                  value={alerts().latencyWarnMs}
-                  onInput={(event) => updateAlerts({ latencyWarnMs: Number(event.currentTarget.value) || 150 })}
-                />
-              </td>
-              <td class="px-4 py-3">
-                <input
-                  class="h-8 w-24 rounded-md border border-gray-300 bg-gray-100 px-2 text-sm dark:border-gray-700 dark:bg-gray-700 dark:text-gray-100"
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={alerts().packetLossWarnPct}
-                  onInput={(event) => updateAlerts({ packetLossWarnPct: Number(event.currentTarget.value) || 5 })}
-                />
-              </td>
-              <td class="px-4 py-3 text-right text-xs text-gray-500 dark:text-gray-400">
-                Offline {enabledText(alerts().offlineEnabled)} / Warning {enabledText(alerts().warningEnabled)}
-              </td>
-            </tr>
-            <For each={checks()}>
-              {(check) => {
-                const enabled = () => !(alerts().checkOverrides ?? {})[check.id];
-                return (
-                  <tr>
-                    <td class="px-4 py-3">
-                      <Toggle
-                        checked={enabled()}
-                        onChange={(event) => updateCheckOverride(check.id, !event.currentTarget.checked)}
-                        ariaLabel={`Toggle ${check.name} alerting`}
-                        size="sm"
-                      />
-                    </td>
-                    <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{check.name}</td>
-                    <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{check.type.toUpperCase()}</td>
-                    <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{enabledText(enabled())}</td>
-                    <td class="px-4 py-3 text-gray-500 dark:text-gray-400">Inherited</td>
-                    <td class="px-4 py-3 text-gray-500 dark:text-gray-400">Inherited</td>
-                    <td class="px-4 py-3 text-right text-xs text-gray-500 dark:text-gray-400">
-                      every {check.intervalSeconds}s
-                    </td>
-                  </tr>
-                );
-              }}
-            </For>
-            <For each={devices()}>
-              {(device) => {
-                const enabled = () => !(alerts().deviceOverrides ?? {})[device.id];
-                return (
-                  <tr>
-                    <td class="px-4 py-3">
-                      <Toggle
-                        checked={enabled()}
-                        onChange={(event) => updateDeviceOverride(device.id, !event.currentTarget.checked)}
-                        ariaLabel={`Toggle ${device.name} alerting`}
-                        size="sm"
-                      />
-                    </td>
-                    <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{device.name}</td>
-                    <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.accountType.toUpperCase()}</td>
-                    <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.status}</td>
-                    <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.latencyMs ?? '-'}</td>
-                    <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.packetLoss ?? '-'}</td>
-                    <td class="px-4 py-3 text-right text-xs text-gray-500 dark:text-gray-400">
-                      {device.host || '-'}
-                    </td>
-                  </tr>
-                );
-              }}
-            </For>
-            <Show when={checks().length === 0 && devices().length === 0}>
+      }
+    >
+      <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 text-xs font-semibold uppercase tracking-normal text-gray-500 dark:bg-gray-900/60 dark:text-gray-400">
               <tr>
-                <td colSpan={7} class="px-4 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
-                  No device checks or inventory entries configured.
-                </td>
+                <th class="w-20 px-4 py-2 text-left">Alerts</th>
+                <th class="px-4 py-2 text-left">Resource</th>
+                <th class="px-4 py-2 text-left">Type</th>
+                <th class="px-4 py-2 text-left">State</th>
+                <th class="px-4 py-2 text-left">Latency ms</th>
+                <th class="px-4 py-2 text-left">Packet loss %</th>
+                <th class="px-4 py-2 text-left">Address</th>
               </tr>
-            </Show>
-          </tbody>
-        </table>
+            </thead>
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+              <For each={devices()}>
+                {(device) => {
+                  const enabled = () => !(alerts().deviceOverrides ?? {})[device.id];
+                  return (
+                    <tr>
+                      <td class="px-4 py-3">
+                        <Toggle
+                          checked={enabled()}
+                          onChange={(event) => updateDeviceOverride(device.id, !event.currentTarget.checked)}
+                          ariaLabel={`Toggle ${device.name} alerting`}
+                          size="sm"
+                        />
+                      </td>
+                      <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{device.name}</td>
+                      <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.accountType.toUpperCase()}</td>
+                      <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.status}</td>
+                      <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.latencyMs ?? '-'}</td>
+                      <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.packetLoss ?? '-'}</td>
+                      <td class="px-4 py-3 text-gray-500 dark:text-gray-400">{device.host || '-'}</td>
+                    </tr>
+                  );
+                }}
+              </For>
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </CollapsibleSection>
   );
 }
 
