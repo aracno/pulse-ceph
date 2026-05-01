@@ -3258,6 +3258,7 @@ function DeviceCheckAlertsPanel() {
   });
 
   return (
+    <>
     <CollapsibleSection
       id="devices"
       title="Devices"
@@ -3267,7 +3268,7 @@ function DeviceCheckAlertsPanel() {
       headerActions={
         <div class="flex items-center gap-3">
           <span class="text-xs text-gray-500 dark:text-gray-400">
-            {summary().offline ?? 0} offline / {summary().uptime ?? 0} uptime / {summary().latency ?? 0} latency / {summary().packetLoss ?? 0} loss
+            {summary().offline ?? 0} offline / {summary().uptime ?? 0} uptime / {summary().latency ?? 0} latency / {summary().packetLoss ?? 0} loss / {summary().advanced ?? 0} advanced
           </span>
           <Toggle
             checked={alerts().enabled}
@@ -3456,6 +3457,79 @@ function DeviceCheckAlertsPanel() {
         </div>
       </div>
     </CollapsibleSection>
+    <CollapsibleSection
+      id="devices-advanced"
+      title="Devices Advanced"
+      resourceCount={devices().filter((device) => device.advanced).length}
+      icon={<NetworkIcon class="w-5 h-5" />}
+      emptyMessage="No advanced device metrics yet."
+      headerActions={
+        <div class="flex items-center gap-3">
+          <span class="text-xs text-gray-500 dark:text-gray-400">{summary().advanced ?? 0} advanced</span>
+          <Toggle
+            checked={alerts().advancedEnabled}
+            onChange={(event) => updateAlerts({ advancedEnabled: event.currentTarget.checked })}
+            ariaLabel="Toggle advanced device alerts"
+            size="sm"
+          />
+        </div>
+      }
+    >
+      <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
+        <div class="overflow-x-auto">
+          <table class="w-full min-w-[980px] table-fixed text-sm">
+            <thead class="bg-gray-50 text-xs font-semibold uppercase tracking-normal text-gray-500 dark:bg-gray-900/60 dark:text-gray-400">
+              <tr>
+                <th class="px-4 py-2 text-left">Alerts</th>
+                <th class="px-4 py-2 text-left">Resource</th>
+                <th class="px-4 py-2 text-left">CPU %</th>
+                <th class="px-4 py-2 text-left">RAM %</th>
+                <th class="px-4 py-2 text-left">Disk %</th>
+                <th class="px-4 py-2 text-left">Security min</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+              <tr class="bg-gray-50/70 dark:bg-gray-800/50">
+                <td class="px-4 py-3">
+                  <Toggle
+                    checked={alerts().advancedEnabled}
+                    onChange={(event) => updateAlerts({ advancedEnabled: event.currentTarget.checked })}
+                    ariaLabel="Toggle advanced device alerts"
+                    size="sm"
+                  />
+                </td>
+                <td class="px-4 py-3 font-semibold text-gray-900 dark:text-gray-100">Global Defaults</td>
+                <td class="px-4 py-3">
+                  <input type="number" min="0" value={alerts().advancedCpuWarnPct} onInput={(event) => updateAlerts({ advancedCpuWarnPct: Number(event.currentTarget.value) })} class="h-8 w-20 rounded border border-gray-300 bg-white px-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
+                </td>
+                <td class="px-4 py-3">
+                  <input type="number" min="0" value={alerts().advancedMemoryWarnPct} onInput={(event) => updateAlerts({ advancedMemoryWarnPct: Number(event.currentTarget.value) })} class="h-8 w-20 rounded border border-gray-300 bg-white px-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
+                </td>
+                <td class="px-4 py-3">
+                  <input type="number" min="0" value={alerts().advancedDiskWarnPct} onInput={(event) => updateAlerts({ advancedDiskWarnPct: Number(event.currentTarget.value) })} class="h-8 w-20 rounded border border-gray-300 bg-white px-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
+                </td>
+                <td class="px-4 py-3">
+                  <input type="number" min="0" value={alerts().advancedSecurityMin} onInput={(event) => updateAlerts({ advancedSecurityMin: Number(event.currentTarget.value) })} class="h-8 w-20 rounded border border-gray-300 bg-white px-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100" />
+                </td>
+              </tr>
+              <For each={devices().filter((device) => device.advanced)}>
+                {(device) => (
+                  <tr>
+                    <td class="px-4 py-3 text-gray-500 dark:text-gray-400">Inherited</td>
+                    <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{device.name}</td>
+                    <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.advanced?.cpuPercent ?? '-'}</td>
+                    <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.advanced?.memoryPercent ?? '-'}</td>
+                    <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.advanced?.diskPercent ?? '-'}</td>
+                    <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.advanced?.securityScore ?? '-'}</td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </CollapsibleSection>
+    </>
   );
 }
 

@@ -23,6 +23,7 @@ Checks describe how data is collected:
 - `Ping`: default baseline check for reachability, latency, and packet loss.
 - `UniFi`: one or more UniFi Site Manager API checks.
 - `SNMP`: one or more SNMP checks for managed network hardware.
+- `Devices Advanced`: Linux push agents that report advanced local health metrics.
 
 Checks can be added, edited, enabled, disabled, and removed from Settings. Ping checks intentionally do not have a default target because the target belongs to each device entry.
 
@@ -54,6 +55,7 @@ Current collectors:
 - `Ping`: runs a small ICMP sample per device and records online/offline, average latency from successful probes, packet loss percentage, online streak uptime, and timestamps.
 - `UniFi`: calls the official Site Manager `GET /v1/devices` endpoint through the backend allowlisted proxy, normalizes inventory/status/firmware/startup time, and enriches gateway latency/loss from ISP metrics when available.
 - `SNMP`: uses the same ping sample for online/offline, latency, and packet loss, then performs SNMPv2c `sysUpTime` polling when available.
+- `Devices Advanced`: receives pushed Linux agent metrics: uptime, latency to `re.pool.ntp.org`, CPU, RAM, root disk usage, WAN/default-interface throughput, `eth0`-`eth3` throughput, OS metadata, and a basic security score.
 
 Manual checks from the Devices page force the same backend poll path.
 
@@ -107,6 +109,14 @@ is meant to catch recent reboots without treating long-running devices as a
 problem.
 
 The backend evaluates these settings after each poll and persists the latest summary. This keeps the behavior aligned with the existing Pulse alerting model: broad family switches first, then targeted overrides.
+
+## Devices Advanced Agent
+
+Create a `Devices Advanced` check in Settings to generate a unique token and an install command. The command downloads the backend-served shell script and installs a cron entry on Linux devices. Runtime metrics are pushed back to `/api/devices/agent/push` with the check token.
+
+The script template is editable from `Settings -> Platforms -> Devices`. Pulse injects `{{BASE_URL}}`, `{{TOKEN}}`, and `{{INTERVAL_SECONDS}}` at download time.
+
+The installed collector does not keep local metric state. It samples interface counters over a short interval and sends the current result to Pulse. Security scoring is intentionally basic and transparent: it checks SSH root login, SSH password auth, listening socket count, firewall tooling, and world-writable temp files, then reports a score out of 100.
 
 ## SNMP Notes
 

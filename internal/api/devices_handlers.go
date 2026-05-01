@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -22,6 +23,73 @@ func (r *Router) requireDeviceScope(handler http.HandlerFunc) http.HandlerFunc {
 		}
 		handler(w, req)
 	})
+}
+
+func (r *Router) handleDeviceAgentScript(w http.ResponseWriter, req *http.Request) {
+	switch req.Method {
+	case http.MethodGet:
+		_ = utils.WriteJSONResponse(w, r.deviceStore.snapshot().Agent)
+	case http.MethodPut:
+		var payload deviceAgentScriptSettings
+		if !decodeJSONBody(w, req, &payload) {
+			return
+		}
+		if err := r.deviceStore.updateAgentScript(payload.Script); err != nil {
+			writeErrorResponse(w, http.StatusInternalServerError, "save_failed", "Failed to save device agent script", nil)
+			return
+		}
+		_ = utils.WriteJSONResponse(w, r.deviceStore.snapshot().Agent)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (r *Router) handleDeviceAgentScriptDownload(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := readBearerToken(req)
+	check, ok := r.deviceStore.findAgentCheckByToken(token)
+	if !ok {
+		writeErrorResponse(w, http.StatusUnauthorized, "invalid_agent_token", "Invalid device agent token", nil)
+		return
+	}
+	baseURL := req.URL.Query().Get("baseUrl")
+	if baseURL == "" {
+		scheme := "http"
+		if req.TLS != nil {
+			scheme = "https"
+		}
+		baseURL = fmt.Sprintf("%s://%s", scheme, req.Host)
+	}
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	_, _ = w.Write([]byte(renderDeviceAgentScript(r.deviceStore.agentScript(), baseURL, token, check.IntervalSeconds)))
+}
+
+func (r *Router) handleDeviceAgentPush(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := readBearerToken(req)
+	check, ok := r.deviceStore.findAgentCheckByToken(token)
+	if !ok {
+		writeErrorResponse(w, http.StatusUnauthorized, "invalid_agent_token", "Invalid device agent token", nil)
+		return
+	}
+	req.Body = http.MaxBytesReader(w, req.Body, 1024*1024)
+	payload, err := decodeAgentPayload(req)
+	if err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "invalid_payload", "Invalid agent metrics payload", nil)
+		return
+	}
+	device, err := r.deviceStore.ingestAgentMetrics(check, payload)
+	if err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "ingest_failed", "Failed to persist agent metrics", nil)
+		return
+	}
+	_ = utils.WriteJSONResponse(w, device)
 }
 
 func (r *Router) handleDevicesState(w http.ResponseWriter, req *http.Request) {
@@ -50,6 +118,9 @@ func (r *Router) handleDeviceChecks(w http.ResponseWriter, req *http.Request) {
 			writeErrorResponse(w, http.StatusInternalServerError, "save_failed", "Failed to save device check", nil)
 			return
 		}
+		if saved.Type == deviceCheckAgent {
+			saved.InstallCommand = buildDeviceAgentInstallCommand(req, saved.APIKey)
+		}
 		_ = utils.WriteJSONResponse(w, redactDeviceCheck(saved))
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -74,6 +145,9 @@ func (r *Router) handleDeviceCheck(w http.ResponseWriter, req *http.Request) {
 			writeErrorResponse(w, http.StatusInternalServerError, "save_failed", "Failed to save device check", nil)
 			return
 		}
+		if saved.Type == deviceCheckAgent {
+			saved.InstallCommand = buildDeviceAgentInstallCommand(req, saved.APIKey)
+		}
 		_ = utils.WriteJSONResponse(w, redactDeviceCheck(saved))
 	case http.MethodDelete:
 		if err := r.deviceStore.deleteCheck(id); err != nil {
@@ -84,6 +158,15 @@ func (r *Router) handleDeviceCheck(w http.ResponseWriter, req *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func buildDeviceAgentInstallCommand(req *http.Request, token string) string {
+	scheme := "http"
+	if req.TLS != nil {
+		scheme = "https"
+	}
+	baseURL := fmt.Sprintf("%s://%s", scheme, req.Host)
+	return fmt.Sprintf("curl -fsSL '%s/api/devices/agent/script.sh?token=%s' | sudo sh -s -- install", baseURL, token)
 }
 
 func (r *Router) handleManagedDevices(w http.ResponseWriter, req *http.Request) {

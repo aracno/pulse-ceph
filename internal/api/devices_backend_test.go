@@ -304,3 +304,46 @@ func TestDevicesStoreEvaluatesPerDeviceAlertRules(t *testing.T) {
 		t.Fatalf("expected per-device packet loss disable to suppress loss alert, got %#v", summary)
 	}
 }
+
+func TestDevicesStoreIngestsAgentMetricsAndEvaluatesAdvancedAlerts(t *testing.T) {
+	store := newDevicesStore(t.TempDir())
+	check, err := store.upsertCheck(deviceCheck{
+		ID:              "agent-main",
+		Type:            deviceCheckAgent,
+		Name:            "Linux agents",
+		Enabled:         true,
+		IntervalSeconds: 300,
+	})
+	if err != nil {
+		t.Fatalf("upsert agent check: %v", err)
+	}
+	cpu := 91.0
+	security := 65.0
+	uptime := 1200.0
+	latency := 12.0
+	payload := deviceAgentPayload{
+		DeviceID:      "edge-1",
+		Name:          "edge-1",
+		Host:          "edge-1.local",
+		Status:        deviceOnline,
+		UptimeSeconds: &uptime,
+		LatencyMs:     &latency,
+		Advanced: &deviceAdvanced{
+			CPUPercent:    &cpu,
+			SecurityScore: &security,
+			OS:            "Debian",
+		},
+	}
+
+	device, err := store.ingestAgentMetrics(check, payload)
+	if err != nil {
+		t.Fatalf("ingest agent metrics: %v", err)
+	}
+	if device.AccountType != deviceCheckAgent || device.Advanced == nil {
+		t.Fatalf("expected advanced agent device, got %#v", device)
+	}
+	summary := store.snapshot().Alerts.LastEvaluationSummary
+	if summary["advanced"] != 1 {
+		t.Fatalf("expected advanced alert from CPU/security thresholds, got %#v", summary)
+	}
+}

@@ -35,6 +35,7 @@ const sourceClasses: Record<DeviceAccountType, string> = {
   ping: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200',
   unifi: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
   snmp: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300',
+  agent: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
 };
 
 const typeIcon = (type?: string) => {
@@ -63,6 +64,19 @@ const formatLastSeen = (value?: string) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Never';
   return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+};
+
+const formatPercent = (value?: number) => typeof value === 'number' ? `${value.toFixed(1)}%` : '-';
+const formatBps = (value?: number) => {
+  if (typeof value !== 'number') return '-';
+  const units = ['bps', 'Kbps', 'Mbps', 'Gbps'];
+  let next = value * 8;
+  let unit = 0;
+  while (next >= 1000 && unit < units.length - 1) {
+    next /= 1000;
+    unit += 1;
+  }
+  return `${next.toFixed(next >= 10 ? 1 : 2)} ${units[unit]}`;
 };
 
 type DeviceSortKey = 'name' | 'type' | 'status' | 'latency' | 'source';
@@ -322,6 +336,56 @@ export const Devices: Component = () => {
                 <For each={filteredDevices()}>
                   {(device) => (
                     <DeviceRow device={device} onDebug={setDebugDevice} />
+                  )}
+                </For>
+              </tbody>
+            </table>
+          </ScrollableTable>
+        </Card>
+      </Show>
+
+      <Show when={devices().some((device) => device.accountType === 'agent' || device.advanced)}>
+        <Card padding="none" tone="glass" class="overflow-hidden">
+          <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
+            <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Devices Advanced</h3>
+          </div>
+          <ScrollableTable persistKey="devices-advanced" minWidth="1120px" mobileMinWidth="1120px">
+            <table class="w-full border-collapse whitespace-nowrap" style={{ 'table-layout': 'fixed', 'min-width': '1120px' }}>
+              <thead>
+                <tr class="border-b border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-700 dark:bg-gray-700/50 dark:text-gray-300">
+                  <th class={`${thClass} text-left pl-4`} style={{ width: '220px' }}>Device</th>
+                  <th class={`${thClass} text-left`} style={{ width: '120px' }}>Uptime</th>
+                  <th class={`${thClass} text-left`} style={{ width: '110px' }}>CPU</th>
+                  <th class={`${thClass} text-left`} style={{ width: '110px' }}>RAM</th>
+                  <th class={`${thClass} text-left`} style={{ width: '110px' }}>Disk</th>
+                  <th class={`${thClass} text-left`} style={{ width: '150px' }}>WAN RX / TX</th>
+                  <th class={`${thClass} text-left`} style={{ width: '150px' }}>eth0 RX / TX</th>
+                  <th class={`${thClass} text-left`} style={{ width: '110px' }}>Security</th>
+                  <th class={`${thClass} text-left`} style={{ width: '190px' }}>OS</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                <For each={devices().filter((device) => device.accountType === 'agent' || device.advanced)}>
+                  {(device) => (
+                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                      <td class="px-3 py-2 pl-4 font-medium text-gray-900 dark:text-gray-100">{device.name}</td>
+                      <td class="px-3 py-2 text-gray-700 dark:text-gray-300">{device.uptime || '-'}</td>
+                      <td class="px-3 py-2 text-gray-700 dark:text-gray-300">{formatPercent(device.advanced?.cpuPercent)}</td>
+                      <td class="px-3 py-2 text-gray-700 dark:text-gray-300">{formatPercent(device.advanced?.memoryPercent)}</td>
+                      <td class="px-3 py-2 text-gray-700 dark:text-gray-300">{formatPercent(device.advanced?.diskPercent)}</td>
+                      <td class="px-3 py-2 text-gray-700 dark:text-gray-300">
+                        {formatBps(device.advanced?.wanRxBps)} / {formatBps(device.advanced?.wanTxBps)}
+                      </td>
+                      <td class="px-3 py-2 text-gray-700 dark:text-gray-300">
+                        {formatBps(device.advanced?.ethThroughputBps?.eth0?.rx)} / {formatBps(device.advanced?.ethThroughputBps?.eth0?.tx)}
+                      </td>
+                      <td class="px-3 py-2">
+                        <span class={device.advanced?.securityScore !== undefined && device.advanced.securityScore >= 70 ? statusClasses.online : statusClasses.warning}>
+                          {device.advanced?.securityScore !== undefined ? `${device.advanced.securityScore}/100` : '-'}
+                        </span>
+                      </td>
+                      <td class="truncate px-3 py-2 text-gray-500 dark:text-gray-400">{device.advanced?.os || '-'}</td>
+                    </tr>
                   )}
                 </For>
               </tbody>

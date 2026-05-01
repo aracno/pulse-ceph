@@ -28,6 +28,7 @@ const (
 	deviceCheckPing  deviceCheckType     = "ping"
 	deviceCheckUniFi deviceCheckType     = "unifi"
 	deviceCheckSNMP  deviceCheckType     = "snmp"
+	deviceCheckAgent deviceCheckType     = "agent"
 	deviceOnline     managedDeviceStatus = "online"
 	deviceWarning    managedDeviceStatus = "warning"
 	deviceOffline    managedDeviceStatus = "offline"
@@ -57,6 +58,7 @@ type deviceCheck struct {
 	CreatedAt       string          `json:"createdAt"`
 	LastCheckedAt   string          `json:"lastCheckedAt,omitempty"`
 	LastError       string          `json:"lastError,omitempty"`
+	InstallCommand  string          `json:"installCommand,omitempty"`
 }
 
 type managedDevice struct {
@@ -74,11 +76,43 @@ type managedDevice struct {
 	PacketLoss      *float64            `json:"packetLoss,omitempty"`
 	Uptime          string              `json:"uptime,omitempty"`
 	UptimeSeconds   *float64            `json:"uptimeSeconds,omitempty"`
+	Advanced        *deviceAdvanced     `json:"advanced,omitempty"`
 	FirmwareVersion string              `json:"firmwareVersion,omitempty"`
 	LastSeen        string              `json:"lastSeen,omitempty"`
 	LastCheckedAt   string              `json:"lastCheckedAt,omitempty"`
 	Notes           string              `json:"notes,omitempty"`
 	Raw             map[string]any      `json:"raw,omitempty"`
+}
+
+type deviceAdvanced struct {
+	CPUPercent       *float64           `json:"cpuPercent,omitempty"`
+	MemoryPercent    *float64           `json:"memoryPercent,omitempty"`
+	DiskPercent      *float64           `json:"diskPercent,omitempty"`
+	WANRxBps         *float64           `json:"wanRxBps,omitempty"`
+	WANTxBps         *float64           `json:"wanTxBps,omitempty"`
+	EthThroughputBps map[string]txrxBps `json:"ethThroughputBps,omitempty"`
+	SecurityScore    *float64           `json:"securityScore,omitempty"`
+	SecurityChecks   []securityCheck    `json:"securityChecks,omitempty"`
+	OS               string             `json:"os,omitempty"`
+	Kernel           string             `json:"kernel,omitempty"`
+	Hostname         string             `json:"hostname,omitempty"`
+	CollectedAt      string             `json:"collectedAt,omitempty"`
+}
+
+type txrxBps struct {
+	Rx *float64 `json:"rx,omitempty"`
+	Tx *float64 `json:"tx,omitempty"`
+}
+
+type securityCheck struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Passed bool   `json:"passed"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type deviceAgentScriptSettings struct {
+	Script string `json:"script"`
 }
 
 type deviceAlertSettings struct {
@@ -93,6 +127,11 @@ type deviceAlertSettings struct {
 	CheckOverrides        map[string]bool            `json:"checkOverrides,omitempty"`
 	DeviceOverrides       map[string]bool            `json:"deviceOverrides,omitempty"`
 	DeviceRules           map[string]deviceAlertRule `json:"deviceRules,omitempty"`
+	AdvancedEnabled       bool                       `json:"advancedEnabled"`
+	AdvancedCPUWarnPct    float64                    `json:"advancedCpuWarnPct"`
+	AdvancedMemoryWarnPct float64                    `json:"advancedMemoryWarnPct"`
+	AdvancedDiskWarnPct   float64                    `json:"advancedDiskWarnPct"`
+	AdvancedSecurityMin   float64                    `json:"advancedSecurityMin"`
 	LastEvaluatedAt       string                     `json:"lastEvaluatedAt,omitempty"`
 	LastEvaluationSummary map[string]int             `json:"lastEvaluationSummary,omitempty"`
 }
@@ -108,10 +147,11 @@ type deviceAlertRule struct {
 }
 
 type devicesState struct {
-	Checks    []deviceCheck       `json:"checks"`
-	Devices   []managedDevice     `json:"devices"`
-	Alerts    deviceAlertSettings `json:"alerts"`
-	UpdatedAt string              `json:"updatedAt"`
+	Checks    []deviceCheck             `json:"checks"`
+	Devices   []managedDevice           `json:"devices"`
+	Alerts    deviceAlertSettings       `json:"alerts"`
+	Agent     deviceAgentScriptSettings `json:"agent,omitempty"`
+	UpdatedAt string                    `json:"updatedAt"`
 }
 
 type devicesStore struct {
@@ -138,6 +178,7 @@ func newDevicesStore(dataPath string) *devicesStore {
 			Checks:  []deviceCheck{defaultDeviceCheck()},
 			Devices: []managedDevice{},
 			Alerts:  defaultDeviceAlertSettings(),
+			Agent:   deviceAgentScriptSettings{Script: defaultDeviceAgentScript()},
 		},
 	}
 	if err := store.load(); err != nil {
@@ -164,17 +205,22 @@ func defaultDeviceCheck() deviceCheck {
 
 func defaultDeviceAlertSettings() deviceAlertSettings {
 	return deviceAlertSettings{
-		Enabled:           true,
-		OfflineEnabled:    true,
-		LatencyEnabled:    true,
-		LatencyWarnMs:     150,
-		PacketLossEnabled: true,
-		PacketLossWarnPct: 5,
-		UptimeEnabled:     false,
-		UptimeMinSeconds:  300,
-		CheckOverrides:    map[string]bool{},
-		DeviceOverrides:   map[string]bool{},
-		DeviceRules:       map[string]deviceAlertRule{},
+		Enabled:               true,
+		OfflineEnabled:        true,
+		LatencyEnabled:        true,
+		LatencyWarnMs:         150,
+		PacketLossEnabled:     true,
+		PacketLossWarnPct:     5,
+		UptimeEnabled:         false,
+		UptimeMinSeconds:      300,
+		CheckOverrides:        map[string]bool{},
+		DeviceOverrides:       map[string]bool{},
+		DeviceRules:           map[string]deviceAlertRule{},
+		AdvancedEnabled:       true,
+		AdvancedCPUWarnPct:    85,
+		AdvancedMemoryWarnPct: 90,
+		AdvancedDiskWarnPct:   90,
+		AdvancedSecurityMin:   70,
 	}
 }
 
@@ -209,6 +255,13 @@ func (s *devicesStore) normalizeLocked() {
 	if s.state.Alerts.UptimeEnabled && s.state.Alerts.UptimeMinSeconds <= 0 {
 		s.state.Alerts.UptimeMinSeconds = 300
 	}
+	if s.state.Alerts.AdvancedCPUWarnPct == 0 && s.state.Alerts.AdvancedMemoryWarnPct == 0 && s.state.Alerts.AdvancedDiskWarnPct == 0 && s.state.Alerts.AdvancedSecurityMin == 0 {
+		s.state.Alerts.AdvancedEnabled = true
+		s.state.Alerts.AdvancedCPUWarnPct = 85
+		s.state.Alerts.AdvancedMemoryWarnPct = 90
+		s.state.Alerts.AdvancedDiskWarnPct = 90
+		s.state.Alerts.AdvancedSecurityMin = 70
+	}
 	if s.state.Alerts.CheckOverrides == nil {
 		s.state.Alerts.CheckOverrides = map[string]bool{}
 	}
@@ -217,6 +270,9 @@ func (s *devicesStore) normalizeLocked() {
 	}
 	if s.state.Alerts.DeviceRules == nil {
 		s.state.Alerts.DeviceRules = map[string]deviceAlertRule{}
+	}
+	if strings.TrimSpace(s.state.Agent.Script) == "" {
+		s.state.Agent.Script = defaultDeviceAgentScript()
 	}
 	for i := range s.state.Checks {
 		check := &s.state.Checks[i]
@@ -349,6 +405,9 @@ func (s *devicesStore) upsertCheck(input deviceCheck) (deviceCheck, error) {
 	}
 	if input.IntervalSeconds <= 0 {
 		input.IntervalSeconds = 60
+	}
+	if input.Type == deviceCheckAgent && strings.TrimSpace(input.APIKey) == "" {
+		input.APIKey = utils.GenerateID("device-agent-token")
 	}
 	input.APIKeyHint = secretHint(input.APIKey, input.APIKeyHint, 6)
 	input.CommunityHint = secretHint(input.Credential, input.CommunityHint, 4)
@@ -508,6 +567,8 @@ func (s *devicesStore) pollDue(force bool) devicesState {
 			updated = mergeUniFiDevice(device, discovered)
 		case deviceCheckSNMP:
 			updated, checkErr = pollSNMPDevice(device, check)
+		case deviceCheckAgent:
+			continue
 		default:
 			updated, checkErr = pollPingDevice(device, check)
 		}
@@ -855,7 +916,7 @@ func unifiMatch(a, b managedDevice) bool {
 func (s *devicesStore) evaluateDeviceAlerts() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	summary := map[string]int{"offline": 0, "uptime": 0, "latency": 0, "packetLoss": 0}
+	summary := map[string]int{"offline": 0, "uptime": 0, "latency": 0, "packetLoss": 0, "advanced": 0}
 	cfg := s.state.Alerts
 	if cfg.Enabled {
 		for _, device := range s.state.Devices {
@@ -875,11 +936,33 @@ func (s *devicesStore) evaluateDeviceAlerts() {
 			if rule.UptimeEnabled && device.Status == deviceOnline && device.UptimeSeconds != nil && *device.UptimeSeconds >= 0 && *device.UptimeSeconds <= rule.UptimeMinSeconds {
 				summary["uptime"]++
 			}
+			if cfg.AdvancedEnabled && device.Advanced != nil && deviceAdvancedAlerting(device.Advanced, cfg) {
+				summary["advanced"]++
+			}
 		}
 	}
 	s.state.Alerts.LastEvaluatedAt = time.Now().UTC().Format(time.RFC3339)
 	s.state.Alerts.LastEvaluationSummary = summary
 	_ = s.saveLocked()
+}
+
+func deviceAdvancedAlerting(metrics *deviceAdvanced, cfg deviceAlertSettings) bool {
+	if metrics == nil {
+		return false
+	}
+	if cfg.AdvancedCPUWarnPct > 0 && metrics.CPUPercent != nil && *metrics.CPUPercent >= cfg.AdvancedCPUWarnPct {
+		return true
+	}
+	if cfg.AdvancedMemoryWarnPct > 0 && metrics.MemoryPercent != nil && *metrics.MemoryPercent >= cfg.AdvancedMemoryWarnPct {
+		return true
+	}
+	if cfg.AdvancedDiskWarnPct > 0 && metrics.DiskPercent != nil && *metrics.DiskPercent >= cfg.AdvancedDiskWarnPct {
+		return true
+	}
+	if cfg.AdvancedSecurityMin > 0 && metrics.SecurityScore != nil && *metrics.SecurityScore < cfg.AdvancedSecurityMin {
+		return true
+	}
+	return false
 }
 
 type effectiveDeviceAlerts struct {

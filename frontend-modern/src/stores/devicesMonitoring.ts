@@ -1,7 +1,7 @@
 import { createSignal } from 'solid-js';
 import { DevicesAPI } from '@/api/devices';
 
-export type DeviceAccountType = 'ping' | 'unifi' | 'snmp';
+export type DeviceAccountType = 'ping' | 'unifi' | 'snmp' | 'agent';
 export type DeviceStatus = 'online' | 'warning' | 'offline' | 'unknown';
 
 export interface DeviceAccount {
@@ -27,6 +27,7 @@ export interface DeviceAccount {
   createdAt: string;
   lastCheckedAt?: string;
   lastError?: string;
+  installCommand?: string;
 }
 
 export interface DeviceInventoryItem {
@@ -44,11 +45,27 @@ export interface DeviceInventoryItem {
   packetLoss?: number;
   uptime?: string;
   uptimeSeconds?: number;
+  advanced?: DeviceAdvancedMetrics;
   firmwareVersion?: string;
   lastSeen?: string;
   lastCheckedAt?: string;
   notes?: string;
   raw?: Record<string, unknown>;
+}
+
+export interface DeviceAdvancedMetrics {
+  cpuPercent?: number;
+  memoryPercent?: number;
+  diskPercent?: number;
+  wanRxBps?: number;
+  wanTxBps?: number;
+  ethThroughputBps?: Record<string, { rx?: number; tx?: number }>;
+  securityScore?: number;
+  securityChecks?: Array<{ id: string; label: string; passed: boolean; detail?: string }>;
+  os?: string;
+  kernel?: string;
+  hostname?: string;
+  collectedAt?: string;
 }
 
 export interface DeviceAlertSettings {
@@ -63,6 +80,11 @@ export interface DeviceAlertSettings {
   checkOverrides?: Record<string, boolean>;
   deviceOverrides?: Record<string, boolean>;
   deviceRules?: Record<string, DeviceAlertRule>;
+  advancedEnabled: boolean;
+  advancedCpuWarnPct: number;
+  advancedMemoryWarnPct: number;
+  advancedDiskWarnPct: number;
+  advancedSecurityMin: number;
   lastEvaluatedAt?: string;
   lastEvaluationSummary?: Record<string, number>;
 }
@@ -106,6 +128,11 @@ const defaultAlerts = (): DeviceAlertSettings => ({
   checkOverrides: {},
   deviceOverrides: {},
   deviceRules: {},
+  advancedEnabled: true,
+  advancedCpuWarnPct: 85,
+  advancedMemoryWarnPct: 90,
+  advancedDiskWarnPct: 90,
+  advancedSecurityMin: 70,
 });
 
 const [accounts, setAccounts] = createSignal<DeviceAccount[]>([defaultPingAccount()]);

@@ -397,6 +397,9 @@ func (r *Router) setupRoutes() {
 	r.mux.HandleFunc("/api/devices/inventory/", r.requireDeviceScope(r.handleManagedDevice))
 	r.mux.HandleFunc("/api/devices/alerts", r.requireDeviceScope(r.handleDevicesAlerts))
 	r.mux.HandleFunc("/api/devices/poll", r.requireDeviceScope(r.handleDevicesPoll))
+	r.mux.HandleFunc("/api/devices/agent/script", r.requireDeviceScope(r.handleDeviceAgentScript))
+	r.mux.HandleFunc("/api/devices/agent/script.sh", r.handleDeviceAgentScriptDownload)
+	r.mux.HandleFunc("/api/devices/agent/push", r.handleDeviceAgentPush)
 	r.mux.HandleFunc("/api/devices/unifi/discover", RequireAdmin(r.config, RequireScope(config.ScopeSettingsRead, r.handleUniFiDiscover)))
 	r.mux.HandleFunc("/api/devices/unifi/proxy", RequireAdmin(r.config, RequireScope(config.ScopeSettingsRead, r.handleUniFiProxy)))
 

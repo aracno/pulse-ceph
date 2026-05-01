@@ -84,6 +84,7 @@ import type { UpdateInfo, VersionInfo } from '@/api/updates';
 import type { SecurityStatus as SecurityStatusInfo } from '@/types/config';
 import { eventBus } from '@/stores/events';
 import { devicesMonitoringStore, type DeviceAccountType } from '@/stores/devicesMonitoring';
+import { DevicesAPI } from '@/api/devices';
 
 import { updateStore } from '@/stores/updates';
 import { isPro, loadLicenseStatus } from '@/stores/license';
@@ -670,6 +671,8 @@ const Settings: Component<SettingsProps> = (props) => {
   const [newDeviceAccountInterval, setNewDeviceAccountInterval] = createSignal(60);
   const [newDeviceAccountNotes, setNewDeviceAccountNotes] = createSignal('');
   const [editingDeviceCheckId, setEditingDeviceCheckId] = createSignal<string | null>(null);
+  const [deviceAgentInstallCommand, setDeviceAgentInstallCommand] = createSignal('');
+  const [deviceAgentScript, setDeviceAgentScript] = createSignal('');
 
   const addDeviceAccount = async () => {
     const type = newDeviceAccountType();
@@ -699,6 +702,9 @@ const Settings: Component<SettingsProps> = (props) => {
       notificationStore.success(`${patch.name || 'Device'} check updated`, 2000);
     } else {
       const account = await devicesMonitoringStore.addAccount(patch);
+      if (account.type === 'agent' && account.installCommand) {
+        setDeviceAgentInstallCommand(account.installCommand);
+      }
       notificationStore.success(`${account.name} check added`, 2000);
     }
 
@@ -1143,6 +1149,7 @@ const Settings: Component<SettingsProps> = (props) => {
     loadDiscoveredNodes();
     loadSecurityStatus();
     void devicesMonitoringStore.initialize();
+    void DevicesAPI.getAgentScript().then((payload) => setDeviceAgentScript(payload.script)).catch(() => undefined);
     runDiagnostics();
   });
 
@@ -3455,12 +3462,13 @@ const Settings: Component<SettingsProps> = (props) => {
                             onChange={(event) => {
                               const type = event.currentTarget.value as DeviceAccountType;
                               setNewDeviceAccountType(type);
-                              setNewDeviceAccountInterval(type === 'ping' ? 30 : 60);
+                              setNewDeviceAccountInterval(type === 'ping' ? 30 : type === 'agent' ? 300 : 60);
                             }}
                           >
                             <option value="ping">Ping</option>
                             <option value="unifi">UniFi</option>
                             <option value="snmp">SNMP</option>
+                            <option value="agent">Devices Advanced</option>
                           </select>
                         </label>
                         <label class={formField}>
@@ -3474,7 +3482,9 @@ const Settings: Component<SettingsProps> = (props) => {
                                 ? 'UniFi Homelab'
                                 : newDeviceAccountType() === 'snmp'
                                   ? 'Core switches SNMP'
-                                  : 'Fast LAN ping'
+                                  : newDeviceAccountType() === 'agent'
+                                    ? 'Linux device agents'
+                                    : 'Fast LAN ping'
                             }
                           />
                         </label>
@@ -3487,7 +3497,7 @@ const Settings: Component<SettingsProps> = (props) => {
                                 <div class={formField}>
                                   <span class={labelClass()}>Target scope</span>
                                   <div class="rounded-md border border-dashed border-gray-300 px-3 py-2 text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
-                                    Per-device address
+                                    {newDeviceAccountType() === 'agent' ? 'Push agent registration' : 'Per-device address'}
                                   </div>
                                 </div>
                               }
@@ -3541,7 +3551,7 @@ const Settings: Component<SettingsProps> = (props) => {
                       </div>
 
                       <div class="mt-3 grid gap-3 lg:grid-cols-3">
-                        <Show when={newDeviceAccountType() !== 'ping'}>
+                        <Show when={newDeviceAccountType() !== 'ping' && newDeviceAccountType() !== 'agent'}>
                           <label class={formField}>
                             <span class={labelClass()}>
                               {newDeviceAccountType() === 'unifi' ? 'API key' : 'Community / password'}
@@ -3600,6 +3610,39 @@ const Settings: Component<SettingsProps> = (props) => {
                           </button>
                         </Show>
                       </div>
+                    </div>
+
+                    <Show when={deviceAgentInstallCommand()}>
+                      <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900/50 dark:bg-blue-950/30">
+                        <div class="text-sm font-semibold text-blue-900 dark:text-blue-200">Devices Advanced install command</div>
+                        <pre class="mt-3 overflow-x-auto rounded-md bg-gray-950 p-3 text-xs text-gray-100">{deviceAgentInstallCommand()}</pre>
+                      </div>
+                    </Show>
+
+                    <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
+                      <div class="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <h4 class="text-sm font-semibold text-gray-900 dark:text-gray-100">Devices Advanced agent script</h4>
+                          <p class="text-xs text-gray-500 dark:text-gray-400">Template served by the backend to Linux devices. Placeholders are injected at download time.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const saved = await DevicesAPI.updateAgentScript(deviceAgentScript());
+                            setDeviceAgentScript(saved.script);
+                            notificationStore.success('Device agent script updated', 2000);
+                          }}
+                          class="inline-flex h-8 items-center rounded-md bg-blue-600 px-3 text-xs font-medium text-white transition-colors hover:bg-blue-700"
+                        >
+                          Save script
+                        </button>
+                      </div>
+                      <textarea
+                        value={deviceAgentScript()}
+                        onInput={(event) => setDeviceAgentScript(event.currentTarget.value)}
+                        rows={10}
+                        class="w-full rounded-md border border-gray-300 bg-white p-3 font-mono text-xs text-gray-900 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
+                      />
                     </div>
 
                     <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">

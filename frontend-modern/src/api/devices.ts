@@ -5,6 +5,7 @@ export interface DevicesState {
   checks: DeviceAccount[];
   devices: DeviceInventoryItem[];
   alerts: DeviceAlertSettings;
+  agent?: { script: string };
   updatedAt?: string;
 }
 
@@ -52,6 +53,12 @@ export const DevicesAPI = {
     apiFetchJSON<DeviceAlertSettings>(`${baseUrl}/alerts`, {
       method: 'PUT',
       body: JSON.stringify(alerts),
+    }),
+  getAgentScript: () => apiFetchJSON<{ script: string }>(`${baseUrl}/agent/script`),
+  updateAgentScript: (script: string) =>
+    apiFetchJSON<{ script: string }>(`${baseUrl}/agent/script`, {
+      method: 'PUT',
+      body: JSON.stringify({ script }),
     }),
   discoverUniFi: (params: { checkId?: string; baseUrl?: string; apiKey?: string }) =>
     apiFetchJSON<UniFiDiscoveryResponse>(`${baseUrl}/unifi/discover`, {
