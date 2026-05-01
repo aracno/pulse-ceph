@@ -16,6 +16,13 @@ func TestNormalizeUniFiDevicesFlattensOfficialEnvelope(t *testing.T) {
 						"model":       "USW Pro HD 24",
 						"productLine": "switch",
 						"status":      "UPDATE_AVAILABLE",
+						"metrics": map[string]any{
+							"cpu":        float64(0.42),
+							"memory":     float64(67),
+							"wanRxBps":   float64(2500000000),
+							"wanTxBps":   float64(640000000),
+							"packetLoss": float64(0.5),
+						},
 						"site": map[string]any{
 							"name": "Homelab",
 						},
@@ -59,6 +66,21 @@ func TestNormalizeUniFiDevicesFlattensOfficialEnvelope(t *testing.T) {
 	}
 	if sw.Site != "Homelab" {
 		t.Fatalf("expected site name from nested site, got %q", sw.Site)
+	}
+	if sw.CPUUsage == nil || *sw.CPUUsage != 42 {
+		t.Fatalf("expected fractional cpu to normalize to 42%%, got %#v", sw.CPUUsage)
+	}
+	if sw.MemoryUsage == nil || *sw.MemoryUsage != 67 {
+		t.Fatalf("expected memory metric to be retained, got %#v", sw.MemoryUsage)
+	}
+	if sw.WANRxBps == nil || *sw.WANRxBps != 2500000000 {
+		t.Fatalf("expected WAN rx metric to be retained, got %#v", sw.WANRxBps)
+	}
+	if sw.WANTxBps == nil || *sw.WANTxBps != 640000000 {
+		t.Fatalf("expected WAN tx metric to be retained, got %#v", sw.WANTxBps)
+	}
+	if sw.PacketLoss == nil || *sw.PacketLoss != 0.5 {
+		t.Fatalf("expected UniFi packet loss metric to be retained when exposed, got %#v", sw.PacketLoss)
 	}
 	if _, ok := byName["U7 Pro"]; !ok {
 		t.Fatalf("expected access point displayName to be preserved, got %#v", devices)

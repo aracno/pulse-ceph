@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gosnmp/gosnmp"
 	"github.com/rcourtman/pulse-go-rewrite/internal/utils"
 	"github.com/rs/zerolog/log"
 )
@@ -72,6 +73,10 @@ type managedDevice struct {
 	MemoryUsage     *float64            `json:"memoryUsage,omitempty"`
 	LatencyMs       *float64            `json:"latencyMs,omitempty"`
 	PacketLoss      *float64            `json:"packetLoss,omitempty"`
+	WANRxBps        *float64            `json:"wanRxBps,omitempty"`
+	WANTxBps        *float64            `json:"wanTxBps,omitempty"`
+	Eth0RxBps       *float64            `json:"eth0RxBps,omitempty"`
+	Eth0TxBps       *float64            `json:"eth0TxBps,omitempty"`
 	Uptime          string              `json:"uptime,omitempty"`
 	FirmwareVersion string              `json:"firmwareVersion,omitempty"`
 	LastSeen        string              `json:"lastSeen,omitempty"`
@@ -517,11 +522,13 @@ func (s *devicesStore) discoverUniFi(check deviceCheck) ([]managedDevice, error)
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-API-Key", check.APIKey)
+	start := time.Now()
 	response, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer response.Body.Close()
+	apiLatency := float64(time.Since(start).Milliseconds())
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		var errPayload map[string]any
 		_ = json.NewDecoder(response.Body).Decode(&errPayload)
@@ -531,11 +538,14 @@ func (s *devicesStore) discoverUniFi(check deviceCheck) ([]managedDevice, error)
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		return nil, err
 	}
-	return normalizeUniFiDevices(body, check.ID, check.SiteFilter), nil
+	devices := normalizeUniFiDevices(body, check.ID, check.SiteFilter)
+	for i := range devices {
+		devices[i].LatencyMs = &apiLatency
+	}
+	return devices, nil
 }
 
 func pollPingDevice(device managedDevice, check deviceCheck) (managedDevice, error) {
-	start := time.Now()
 	timeout := check.TimeoutMs
 	if timeout <= 0 {
 		timeout = 1500
@@ -544,48 +554,280 @@ func pollPingDevice(device managedDevice, check deviceCheck) (managedDevice, err
 	if host == "" {
 		return device, fmt.Errorf("device address is empty")
 	}
-	cmd := "ping"
-	args := []string{"-c", "1", "-W", strconv.Itoa(max(1, timeout/1000)), host}
-	if runtime.GOOS == "windows" {
-		args = []string{"-n", "1", "-w", strconv.Itoa(timeout), host}
+	samples := check.Retries + 1
+	if samples < 3 {
+		samples = 3
 	}
-	if err := exec.Command(cmd, args...).Run(); err != nil {
-		now := time.Now().UTC().Format(time.RFC3339)
+	if samples > 10 {
+		samples = 10
+	}
+	var successes int
+	var totalLatency time.Duration
+	for i := 0; i < samples; i++ {
+		elapsed, ok := runPingProbe(host, timeout)
+		if ok {
+			successes++
+			totalLatency += elapsed
+		}
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	packetLoss := float64(samples-successes) / float64(samples) * 100
+	device.PacketLoss = roundedFloatPtr(packetLoss, 1)
+	device.LastCheckedAt = now
+	if successes == 0 {
 		device.Status = deviceOffline
-		device.LastCheckedAt = now
+		device.LatencyMs = nil
 		return device, nil
 	}
-	latency := float64(time.Since(start).Milliseconds())
-	packetLoss := float64(0)
-	now := time.Now().UTC().Format(time.RFC3339)
+	latency := float64(totalLatency.Milliseconds()) / float64(successes)
 	device.Status = deviceOnline
-	device.LatencyMs = &latency
-	device.PacketLoss = &packetLoss
+	device.LatencyMs = roundedFloatPtr(latency, 1)
 	device.LastSeen = now
-	device.LastCheckedAt = now
 	return device, nil
 }
 
 func pollSNMPDevice(device managedDevice, check deviceCheck) (managedDevice, error) {
+	host, port := splitSNMPHostPort(device.Host)
+	pingTarget := device
+	pingTarget.Host = host
+	polled, err := pollPingDevice(pingTarget, check)
+	polled.Host = device.Host
+	if err != nil || polled.Status == deviceOffline {
+		return polled, err
+	}
 	timeout := time.Duration(check.TimeoutMs) * time.Millisecond
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	}
-	host := device.Host
-	if !strings.Contains(host, ":") {
-		host = net.JoinHostPort(host, "161")
-	}
-	conn, err := net.DialTimeout("udp", host, timeout)
+	conn, err := net.DialTimeout("udp", net.JoinHostPort(host, strconv.Itoa(port)), timeout)
 	now := time.Now().UTC().Format(time.RFC3339)
-	device.LastCheckedAt = now
+	polled.LastCheckedAt = now
 	if err != nil {
-		device.Status = deviceOffline
-		return device, nil
+		polled.Status = deviceWarning
+		polled.Notes = firstNonEmpty(polled.Notes, "SNMP port is not reachable")
+		return polled, nil
 	}
 	_ = conn.Close()
-	device.Status = deviceOnline
-	device.LastSeen = now
-	return device, nil
+	if strings.EqualFold(check.SNMPVersion, "v3") {
+		polled.Status = deviceWarning
+		polled.Notes = "SNMPv3 credentials are stored, but v3 polling is not enabled yet; using ping reachability only"
+		return polled, nil
+	}
+	community := strings.TrimSpace(check.Credential)
+	if community == "" {
+		community = "public"
+	}
+	params := &gosnmp.GoSNMP{
+		Target:    host,
+		Port:      uint16(port),
+		Community: community,
+		Version:   gosnmp.Version2c,
+		Timeout:   timeout,
+		Retries:   max(0, check.Retries),
+	}
+	if err := params.Connect(); err != nil {
+		polled.Status = deviceWarning
+		polled.Notes = "SNMP polling failed: " + err.Error()
+		return polled, nil
+	}
+	defer params.Conn.Close()
+	if cpu := snmpAverageProcessorLoad(params); cpu != nil {
+		polled.CPUUsage = cpu
+	}
+	if memory := snmpMemoryUsage(params); memory != nil {
+		polled.MemoryUsage = memory
+	}
+	applySNMPEth0Throughput(params, &polled, now)
+	polled.Status = deviceOnline
+	polled.LastSeen = now
+	return polled, nil
+}
+
+func runPingProbe(host string, timeoutMs int) (time.Duration, bool) {
+	start := time.Now()
+	cmd := "ping"
+	args := []string{"-c", "1", "-W", strconv.Itoa(max(1, timeoutMs/1000)), host}
+	if runtime.GOOS == "windows" {
+		args = []string{"-n", "1", "-w", strconv.Itoa(timeoutMs), host}
+	}
+	if err := exec.Command(cmd, args...).Run(); err != nil {
+		return 0, false
+	}
+	return time.Since(start), true
+}
+
+func splitSNMPHostPort(input string) (string, int) {
+	host := strings.TrimSpace(input)
+	port := 161
+	if parsedHost, parsedPort, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+		if value, err := strconv.Atoi(parsedPort); err == nil && value > 0 {
+			port = value
+		}
+	}
+	return host, port
+}
+
+func snmpAverageProcessorLoad(params *gosnmp.GoSNMP) *float64 {
+	values := []float64{}
+	_ = params.Walk(".1.3.6.1.2.1.25.3.3.1.2", func(pdu gosnmp.SnmpPDU) error {
+		if value, ok := snmpFloatValue(pdu.Value); ok {
+			values = append(values, value)
+		}
+		return nil
+	})
+	if len(values) == 0 {
+		return nil
+	}
+	var total float64
+	for _, value := range values {
+		total += value
+	}
+	return roundedFloatPtr(total/float64(len(values)), 1)
+}
+
+func snmpMemoryUsage(params *gosnmp.GoSNMP) *float64 {
+	descriptions := map[string]string{}
+	allocationUnits := map[string]float64{}
+	sizes := map[string]float64{}
+	used := map[string]float64{}
+	_ = params.Walk(".1.3.6.1.2.1.25.2.3.1.3", func(pdu gosnmp.SnmpPDU) error {
+		descriptions[oidIndex(pdu.Name)] = strings.ToLower(snmpStringValue(pdu.Value))
+		return nil
+	})
+	_ = params.Walk(".1.3.6.1.2.1.25.2.3.1.4", func(pdu gosnmp.SnmpPDU) error {
+		if value, ok := snmpFloatValue(pdu.Value); ok {
+			allocationUnits[oidIndex(pdu.Name)] = value
+		}
+		return nil
+	})
+	_ = params.Walk(".1.3.6.1.2.1.25.2.3.1.5", func(pdu gosnmp.SnmpPDU) error {
+		if value, ok := snmpFloatValue(pdu.Value); ok {
+			sizes[oidIndex(pdu.Name)] = value
+		}
+		return nil
+	})
+	_ = params.Walk(".1.3.6.1.2.1.25.2.3.1.6", func(pdu gosnmp.SnmpPDU) error {
+		if value, ok := snmpFloatValue(pdu.Value); ok {
+			used[oidIndex(pdu.Name)] = value
+		}
+		return nil
+	})
+	for index, description := range descriptions {
+		if !strings.Contains(description, "memory") && !strings.Contains(description, "ram") {
+			continue
+		}
+		size := sizes[index] * allocationUnits[index]
+		usedBytes := used[index] * allocationUnits[index]
+		if size > 0 {
+			return roundedFloatPtr(usedBytes/size*100, 1)
+		}
+	}
+	return nil
+}
+
+func applySNMPEth0Throughput(params *gosnmp.GoSNMP, device *managedDevice, checkedAt string) {
+	index := snmpInterfaceIndex(params, "eth0")
+	if index == "" {
+		return
+	}
+	inOctets := snmpGetFloat(params, ".1.3.6.1.2.1.31.1.1.1.6."+index)
+	outOctets := snmpGetFloat(params, ".1.3.6.1.2.1.31.1.1.1.10."+index)
+	if inOctets == nil || outOctets == nil {
+		inOctets = snmpGetFloat(params, ".1.3.6.1.2.1.2.2.1.10."+index)
+		outOctets = snmpGetFloat(params, ".1.3.6.1.2.1.2.2.1.16."+index)
+	}
+	if inOctets == nil || outOctets == nil {
+		return
+	}
+	raw := device.Raw
+	if raw == nil {
+		raw = map[string]any{}
+	}
+	previous := mapValue(raw, "snmpEth0Counters")
+	if previous != nil {
+		if previousAt, err := time.Parse(time.RFC3339, stringValue(previous, "checkedAt")); err == nil {
+			if currentAt, err := time.Parse(time.RFC3339, checkedAt); err == nil && currentAt.After(previousAt) {
+				seconds := currentAt.Sub(previousAt).Seconds()
+				prevIn, inOK := numberValue(previous, "inOctets")
+				prevOut, outOK := numberValue(previous, "outOctets")
+				if seconds > 0 && inOK && outOK && *inOctets >= prevIn && *outOctets >= prevOut {
+					device.Eth0RxBps = roundedFloatPtr((*inOctets-prevIn)*8/seconds, 1)
+					device.Eth0TxBps = roundedFloatPtr((*outOctets-prevOut)*8/seconds, 1)
+				}
+			}
+		}
+	}
+	raw["snmpEth0Counters"] = map[string]any{
+		"checkedAt": checkedAt,
+		"inOctets":  *inOctets,
+		"outOctets": *outOctets,
+	}
+	device.Raw = raw
+}
+
+func snmpInterfaceIndex(params *gosnmp.GoSNMP, name string) string {
+	var index string
+	_ = params.Walk(".1.3.6.1.2.1.2.2.1.2", func(pdu gosnmp.SnmpPDU) error {
+		if strings.EqualFold(strings.TrimSpace(snmpStringValue(pdu.Value)), name) {
+			index = oidIndex(pdu.Name)
+			return fmt.Errorf("found")
+		}
+		return nil
+	})
+	return index
+}
+
+func snmpGetFloat(params *gosnmp.GoSNMP, oid string) *float64 {
+	result, err := params.Get([]string{oid})
+	if err != nil || len(result.Variables) == 0 {
+		return nil
+	}
+	if value, ok := snmpFloatValue(result.Variables[0].Value); ok {
+		return &value
+	}
+	return nil
+}
+
+func snmpFloatValue(input any) (float64, bool) {
+	switch value := input.(type) {
+	case int:
+		return float64(value), true
+	case uint:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case uint64:
+		return float64(value), true
+	case uint32:
+		return float64(value), true
+	case float64:
+		return value, true
+	case []byte:
+		parsed, err := strconv.ParseFloat(string(value), 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func snmpStringValue(input any) string {
+	switch value := input.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case []byte:
+		return strings.TrimSpace(string(value))
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+}
+
+func oidIndex(oid string) string {
+	parts := strings.Split(strings.Trim(oid, "."), ".")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
 }
 
 func mergeUniFiDevice(current managedDevice, discovered []managedDevice) managedDevice {
@@ -785,6 +1027,21 @@ func normalizeUniFiRecord(record map[string]any, accountID string, index int) ma
 	if name == "" {
 		name = firstNonEmpty(model, host, fmt.Sprintf("UniFi device %d", index+1))
 	}
+	cpuUsage := percentFromPaths(record, [][]string{
+		{"cpu"}, {"cpuUsage"}, {"cpuUtilization"}, {"systemStats", "cpu"}, {"metrics", "cpu"}, {"reportedState", "cpu"},
+	})
+	memoryUsage := percentFromPaths(record, [][]string{
+		{"memory"}, {"memoryUsage"}, {"mem"}, {"memUsage"}, {"systemStats", "memory"}, {"systemStats", "mem"}, {"metrics", "memory"}, {"reportedState", "memory"},
+	})
+	packetLoss := numberFromPaths(record, [][]string{
+		{"packetLoss"}, {"packet_loss"}, {"wan", "packetLoss"}, {"metrics", "packetLoss"}, {"uplink", "packetLoss"},
+	})
+	wanRxBps := numberFromPaths(record, [][]string{
+		{"wanRxBps"}, {"wanDownloadBps"}, {"downloadBps"}, {"rxBps"}, {"wan", "rxBps"}, {"wan", "downloadBps"}, {"metrics", "wanRxBps"}, {"metrics", "downloadBps"}, {"uplink", "rxBps"},
+	})
+	wanTxBps := numberFromPaths(record, [][]string{
+		{"wanTxBps"}, {"wanUploadBps"}, {"uploadBps"}, {"txBps"}, {"wan", "txBps"}, {"wan", "uploadBps"}, {"metrics", "wanTxBps"}, {"metrics", "uploadBps"}, {"uplink", "txBps"},
+	})
 	return managedDevice{
 		ID:              utils.GenerateID("unifi-device"),
 		AccountID:       accountID,
@@ -796,6 +1053,11 @@ func normalizeUniFiRecord(record map[string]any, accountID string, index int) ma
 		Model:           model,
 		Site:            firstNonEmpty(stringValue(record, "siteName"), stringValue(record, "siteId"), stringValue(site, "name"), stringValue(site, "desc")),
 		Status:          status,
+		CPUUsage:        cpuUsage,
+		MemoryUsage:     memoryUsage,
+		PacketLoss:      packetLoss,
+		WANRxBps:        wanRxBps,
+		WANTxBps:        wanTxBps,
 		FirmwareVersion: firstNonEmpty(stringValue(record, "version"), stringValue(record, "firmwareVersion"), stringValue(record, "firmware")),
 		LastSeen:        firstNonEmpty(stringValue(record, "lastSeen"), stringValue(record, "lastConnectionStateChange")),
 		Raw:             record,
@@ -856,6 +1118,85 @@ func stringValue(record map[string]any, key string) string {
 	default:
 		return ""
 	}
+}
+
+func numberValue(record map[string]any, key string) (float64, bool) {
+	if record == nil {
+		return 0, false
+	}
+	switch value := record[key].(type) {
+	case float64:
+		return value, true
+	case float32:
+		return float64(value), true
+	case int:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case uint64:
+		return float64(value), true
+	case json.Number:
+		parsed, err := value.Float64()
+		return parsed, err == nil
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(value, "%")), 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func numberFromPath(record map[string]any, path []string) (float64, bool) {
+	current := record
+	for i, key := range path {
+		if i == len(path)-1 {
+			return numberValue(current, key)
+		}
+		current = mapValue(current, key)
+		if current == nil {
+			return 0, false
+		}
+	}
+	return 0, false
+}
+
+func numberFromPaths(record map[string]any, paths [][]string) *float64 {
+	for _, path := range paths {
+		if value, ok := numberFromPath(record, path); ok {
+			return roundedFloatPtr(value, 1)
+		}
+	}
+	return nil
+}
+
+func percentFromPaths(record map[string]any, paths [][]string) *float64 {
+	for _, path := range paths {
+		if value, ok := numberFromPath(record, path); ok {
+			if value >= 0 && value <= 1 {
+				value *= 100
+			}
+			if value < 0 {
+				value = 0
+			}
+			if value > 100 {
+				value = 100
+			}
+			return roundedFloatPtr(value, 1)
+		}
+	}
+	return nil
+}
+
+func roundedFloatPtr(value float64, precision int) *float64 {
+	if precision < 0 {
+		precision = 0
+	}
+	scale := 1.0
+	for i := 0; i < precision; i++ {
+		scale *= 10
+	}
+	rounded := float64(int(value*scale+0.5)) / scale
+	return &rounded
 }
 
 func firstStringFromArray(value any) string {

@@ -61,6 +61,23 @@ const latencyText = (device: DeviceInventoryItem) => {
   return '-';
 };
 
+const throughputText = (rx?: number, tx?: number) => {
+  if (typeof rx !== 'number' && typeof tx !== 'number') return '-';
+  const format = (value?: number) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
+    const units = ['bps', 'Kbps', 'Mbps', 'Gbps'];
+    let scaled = value;
+    let unit = 0;
+    while (scaled >= 1000 && unit < units.length - 1) {
+      scaled /= 1000;
+      unit += 1;
+    }
+    const digits = scaled >= 100 || unit === 0 ? 0 : 1;
+    return `${scaled.toFixed(digits)} ${units[unit]}`;
+  };
+  return `${format(rx)} / ${format(tx)}`;
+};
+
 const formatLastSeen = (value?: string) => {
   if (!value) return 'Never';
   const date = new Date(value);
@@ -300,8 +317,8 @@ export const Devices: Component = () => {
 
       <Show when={filteredDevices().length > 0} fallback={<Card padding="lg"><EmptyInventory onAdd={openWizard} /></Card>}>
         <Card padding="none" tone="glass" class="overflow-hidden">
-          <ScrollableTable persistKey="devices-overview" minWidth="1000px" mobileMinWidth="1000px">
-            <table class="w-full border-collapse whitespace-nowrap" style={{ 'table-layout': 'fixed', 'min-width': '1000px' }}>
+          <ScrollableTable persistKey="devices-overview" minWidth="1240px" mobileMinWidth="1240px">
+            <table class="w-full border-collapse whitespace-nowrap" style={{ 'table-layout': 'fixed', 'min-width': '1240px' }}>
               <thead>
                 <tr class="border-b border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-700 dark:bg-gray-700/50 dark:text-gray-300">
                   <th class={`${thClass} text-left pl-4`} style={{ width: '230px' }} onClick={() => handleSort('name')}>
@@ -317,6 +334,8 @@ export const Devices: Component = () => {
                   <th class={thClass} style={{ width: '100px' }}>Loss</th>
                   <th class={thClass} style={{ width: '90px' }}>CPU</th>
                   <th class={thClass} style={{ width: '110px' }}>Memory</th>
+                  <th class={thClass} style={{ width: '150px' }}>WAN rx / tx</th>
+                  <th class={thClass} style={{ width: '150px' }}>eth0 rx / tx</th>
                   <th class={thClass} style={{ width: '120px' }}>Last seen</th>
                   <th class={thClass} style={{ width: '100px' }}></th>
                 </tr>
@@ -580,6 +599,8 @@ const DeviceRow: Component<{ device: DeviceInventoryItem }> = (props) => {
       </td>
       <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{percentText(props.device.cpuUsage)}</td>
       <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{percentText(props.device.memoryUsage)}</td>
+      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{throughputText(props.device.wanRxBps, props.device.wanTxBps)}</td>
+      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{throughputText(props.device.eth0RxBps, props.device.eth0TxBps)}</td>
       <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{formatLastSeen(props.device.lastSeen)}</td>
       <td class="px-3 py-2">
         <div class="flex items-center justify-end gap-1 opacity-80 group-hover:opacity-100">

@@ -44,6 +44,10 @@ export interface DeviceInventoryItem {
   memoryUsage?: number;
   latencyMs?: number;
   packetLoss?: number;
+  wanRxBps?: number;
+  wanTxBps?: number;
+  eth0RxBps?: number;
+  eth0TxBps?: number;
   uptime?: string;
   firmwareVersion?: string;
   lastSeen?: string;

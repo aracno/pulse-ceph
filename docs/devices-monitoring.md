@@ -51,9 +51,9 @@ Pulse starts a lightweight devices poller with the main API router. The poller w
 
 Current collectors:
 
-- `Ping`: executes a single ICMP ping and records online/offline, latency, packet loss, and timestamps.
-- `UniFi`: calls the official Site Manager `GET /v1/devices` endpoint through the backend allowlisted proxy, normalizes the response, and merges fresh identity/status data into managed devices.
-- `SNMP`: performs a conservative UDP reachability check against port 161 as a first backend routine. Deeper OID polling can be added without changing the UI model.
+- `Ping`: runs a small ICMP sample per device and records online/offline, average latency from successful probes, packet loss percentage, and timestamps.
+- `UniFi`: calls the official Site Manager `GET /v1/devices` endpoint through the backend allowlisted proxy, measures API latency, normalizes the response, and merges fresh identity/status/telemetry data into managed devices.
+- `SNMP`: uses the same ping sample for online/offline, latency, and packet loss, then performs SNMPv2c polling. Standard HOST-RESOURCES-MIB processor and memory OIDs are used when exposed. IF-MIB counters are sampled over time to calculate `eth0` RX/TX throughput.
 
 Manual checks from the Devices page force the same backend poll path.
 
@@ -68,6 +68,13 @@ Pulse uses the official UniFi Site Manager API surface:
 Authentication uses the `X-API-Key` header. Official responses are wrapped in a standard object with `data`, `httpStatusCode`, and `traceId`; UniFi also documents that fields can vary between versions, especially around nested payloads.
 
 The backend normalizer is intentionally defensive. It walks `data`, `devices`, and `uidb` structures and extracts names from common fields such as `name`, `displayName`, `hostname`, `alias`, `reportedState.name`, and `meta.name`. This prevents the wizard from falling back to generic names like `UniFi device 1` when the API returns nested records.
+
+The telemetry model is deliberately conservative:
+
+- Online/offline comes from the device state returned by the API.
+- Latency is the collector-to-UniFi-API request latency, not ICMP latency to the physical device.
+- CPU, memory, packet loss, and WAN RX/TX throughput are recorded only when the API payload exposes recognizable numeric fields.
+- Packet loss is not synthesized for UniFi devices because the Site Manager device inventory does not guarantee a per-device loss metric.
 
 Pulse intentionally exposes only an allowlisted UniFi proxy surface:
 
@@ -90,13 +97,12 @@ Configurable alert controls:
 
 The backend evaluates these settings after each poll and persists the latest summary. This keeps the behavior aligned with the existing Pulse alerting model: broad family switches first, then targeted overrides.
 
-## SNMP Roadmap
+## SNMP Notes
 
-The SNMP routine currently validates reachability. The next pragmatic layer is to add standard OIDs for:
+SNMP support starts with common vendor-neutral OIDs:
 
-- Uptime.
-- Interface status and throughput.
-- CPU and memory when exposed by the device MIB.
-- Temperature when exposed by the device MIB.
+- CPU: HOST-RESOURCES-MIB `hrProcessorLoad`, averaged across processors.
+- RAM: HOST-RESOURCES-MIB storage rows whose description contains memory/RAM.
+- eth0 throughput: IF-MIB high-capacity octet counters when present, falling back to classic 32-bit octet counters.
 
-SNMPv3 should be preferred when available; SNMPv2c remains useful for homelab equipment that only exposes community-based polling.
+If a device does not expose these standard MIBs or does not name its interface `eth0`, Pulse leaves the value empty instead of guessing. SNMPv3 credentials can be stored in the UI, but the backend polling path currently enables SNMPv2c/community collection first because that is the common homelab baseline.
