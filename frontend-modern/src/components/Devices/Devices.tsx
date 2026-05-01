@@ -79,6 +79,7 @@ export const Devices: Component = () => {
   const [unifiLoading, setUnifiLoading] = createSignal(false);
   const [unifiError, setUnifiError] = createSignal('');
   const [unifiDevices, setUnifiDevices] = createSignal<DeviceInventoryItem[]>([]);
+  const [unifiSearch, setUnifiSearch] = createSignal('');
 
   const accounts = createMemo(() => devicesMonitoringStore.accounts().filter((account) => account.enabled));
   const devices = devicesMonitoringStore.devices;
@@ -89,6 +90,15 @@ export const Devices: Component = () => {
   const warningCount = createMemo(() => devices().filter((device) => device.status === 'warning').length);
   const offlineCount = createMemo(() => devices().filter((device) => device.status === 'offline').length);
   const managedCount = createMemo(() => devices().length);
+  const filteredUnifiDevices = createMemo(() => {
+    const search = unifiSearch().trim().toLowerCase();
+    if (!search) return unifiDevices();
+    return unifiDevices().filter((device) =>
+      [device.name, device.host, device.model, device.site, device.type]
+        .filter(Boolean)
+        .some((value) => value?.toLowerCase().includes(search)),
+    );
+  });
 
   const sourceSummary = createMemo(() => {
     const sources = devices().reduce<Record<string, number>>((acc, device) => {
@@ -111,6 +121,7 @@ export const Devices: Component = () => {
     setUnifiLoading(false);
     setUnifiError('');
     setUnifiDevices([]);
+    setUnifiSearch('');
   };
 
   const openWizard = () => {
@@ -413,26 +424,47 @@ export const Devices: Component = () => {
                         </div>
                       </Show>
                       <Show when={unifiDevices().length > 0}>
-                        <div class="mt-3 max-h-56 overflow-y-auto rounded border border-blue-200 bg-white dark:border-blue-900/60 dark:bg-gray-900">
-                          <For each={unifiDevices()}>
-                            {(device) => (
-                              <button
-                                type="button"
-                                onClick={() => selectUnifiDevice(device)}
-                                class="flex w-full items-center justify-between gap-3 border-b border-gray-200 px-3 py-2 text-left last:border-b-0 hover:bg-blue-50 dark:border-gray-700 dark:hover:bg-blue-900/20"
-                              >
-                                <span>
-                                  <span class="block text-sm font-medium text-gray-900 dark:text-gray-100">{device.name}</span>
-                                  <span class="block text-xs text-gray-500 dark:text-gray-400">
-                                    {[device.model, device.host, device.site].filter(Boolean).join(' - ')}
+                        <div class="mt-3 space-y-2">
+                          <div class="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={unifiSearch()}
+                              onInput={(event) => setUnifiSearch(event.currentTarget.value)}
+                              placeholder="Search UniFi devices..."
+                              class="h-9 min-w-0 flex-1 rounded-md border border-blue-200 bg-white px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-blue-900/60 dark:bg-gray-900 dark:text-gray-100"
+                            />
+                            <span class="whitespace-nowrap text-xs text-blue-800 dark:text-blue-200">
+                              {filteredUnifiDevices().length} / {unifiDevices().length}
+                            </span>
+                          </div>
+                          <div class="max-h-56 overflow-y-auto rounded border border-blue-200 bg-white dark:border-blue-900/60 dark:bg-gray-900">
+                            <For
+                              each={filteredUnifiDevices()}
+                              fallback={
+                                <div class="px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+                                  No UniFi device matches this search.
+                                </div>
+                              }
+                            >
+                              {(device) => (
+                                <button
+                                  type="button"
+                                  onClick={() => selectUnifiDevice(device)}
+                                  class="flex w-full items-center justify-between gap-3 border-b border-gray-200 px-3 py-2 text-left last:border-b-0 hover:bg-blue-50 dark:border-gray-700 dark:hover:bg-blue-900/20"
+                                >
+                                  <span>
+                                    <span class="block text-sm font-medium text-gray-900 dark:text-gray-100">{device.name}</span>
+                                    <span class="block text-xs text-gray-500 dark:text-gray-400">
+                                      {[device.model, device.host, device.site].filter(Boolean).join(' - ')}
+                                    </span>
                                   </span>
-                                </span>
-                                <span class="rounded bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
-                                  Select
-                                </span>
-                              </button>
-                            )}
-                          </For>
+                                  <span class="rounded bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                                    Select
+                                  </span>
+                                </button>
+                              )}
+                            </For>
+                          </div>
                         </div>
                       </Show>
                     </div>

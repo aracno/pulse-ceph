@@ -1,4 +1,4 @@
-import { createSignal, createMemo, Show, For, onMount, onCleanup, createEffect } from 'solid-js';
+import { createSignal, createMemo, Show, For, onMount, onCleanup, createEffect, type JSX } from 'solid-js';
 import { useNavigate, useLocation } from '@solidjs/router';
 import Toggle from '@/components/shared/Toggle';
 import { Card } from '@/components/shared/Card';
@@ -166,6 +166,7 @@ interface SimpleThresholds {
 }
 
 interface ThresholdsTableProps {
+  deviceAlertsPanel?: JSX.Element;
   overrides: () => Override[];
   setOverrides: (overrides: Override[]) => void;
   rawOverridesConfig: () => Record<string, RawOverrideConfig>;
@@ -2983,6 +2984,8 @@ export function ThresholdsTable(props: ThresholdsTableProps) {
           </div>
         </div>
       </Show>
+
+      {props.deviceAlertsPanel}
 
       {/* Tab Navigation */}
       <div class="border-b border-gray-200 dark:border-gray-700">
