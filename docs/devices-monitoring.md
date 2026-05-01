@@ -51,9 +51,9 @@ Pulse starts a lightweight devices poller with the main API router. The poller w
 
 Current collectors:
 
-- `Ping`: runs a small ICMP sample per device and records online/offline, average latency from successful probes, packet loss percentage, and timestamps.
-- `UniFi`: calls the official Site Manager `GET /v1/devices` endpoint through the backend allowlisted proxy, measures API latency, normalizes the response, and merges fresh identity/status/telemetry data into managed devices.
-- `SNMP`: uses the same ping sample for online/offline, latency, and packet loss, then performs SNMPv2c polling. Standard HOST-RESOURCES-MIB processor and memory OIDs are used when exposed. IF-MIB counters are sampled over time to calculate `eth0` RX/TX throughput.
+- `Ping`: runs a small ICMP sample per device and records online/offline, average latency from successful probes, packet loss percentage, online streak uptime, and timestamps.
+- `UniFi`: calls the official Site Manager `GET /v1/devices` endpoint through the backend allowlisted proxy, normalizes inventory/status/firmware/startup time, and enriches gateway latency/loss from ISP metrics when available.
+- `SNMP`: uses the same ping sample for online/offline, latency, and packet loss, then performs SNMPv2c `sysUpTime` polling when available.
 
 Manual checks from the Devices page force the same backend poll path.
 
@@ -72,9 +72,10 @@ The backend normalizer is intentionally defensive. It walks `data`, `devices`, a
 The telemetry model is deliberately conservative:
 
 - Online/offline comes from the device state returned by the API.
-- Latency is the collector-to-UniFi-API request latency, not ICMP latency to the physical device.
-- CPU, memory, packet loss, and WAN RX/TX throughput are recorded only when the API payload exposes recognizable numeric fields.
-- Packet loss is not synthesized for UniFi devices because the Site Manager device inventory does not guarantee a per-device loss metric.
+- Uptime comes from UniFi `startupTime` when present.
+- Gateway latency/loss comes from the UniFi ISP metrics endpoint, which publishes 5-minute interval metrics.
+- Switch/AP latency and loss are left empty unless a reliable API metric exists.
+- CPU, RAM, WAN throughput, and interface throughput are intentionally not collected in Devices because the current Site Manager API payloads do not expose them reliably.
 
 Pulse intentionally exposes only an allowlisted UniFi proxy surface:
 
@@ -89,7 +90,7 @@ Configurable alert controls:
 
 - Global device alert enable/disable.
 - Offline alerts.
-- Warning/degraded state alerts.
+- Uptime minimum threshold.
 - Latency warning threshold.
 - Packet loss warning threshold.
 - Per-check alert enable/disable.
@@ -99,10 +100,9 @@ The backend evaluates these settings after each poll and persists the latest sum
 
 ## SNMP Notes
 
-SNMP support starts with common vendor-neutral OIDs:
+SNMP support is intentionally narrow:
 
-- CPU: HOST-RESOURCES-MIB `hrProcessorLoad`, averaged across processors.
-- RAM: HOST-RESOURCES-MIB storage rows whose description contains memory/RAM.
-- eth0 throughput: IF-MIB high-capacity octet counters when present, falling back to classic 32-bit octet counters.
+- Reachability, latency, and packet loss come from the ping sample.
+- Uptime comes from standard `sysUpTime` (`1.3.6.1.2.1.1.3.0`) when exposed.
 
-If a device does not expose these standard MIBs or does not name its interface `eth0`, Pulse leaves the value empty instead of guessing. SNMPv3 credentials can be stored in the UI, but the backend polling path currently enables SNMPv2c/community collection first because that is the common homelab baseline.
+If a device does not expose `sysUpTime`, Pulse leaves uptime empty instead of guessing. SNMPv3 credentials can be stored in the UI, but the backend polling path currently enables SNMPv2c/community collection first because that is the common homelab baseline.

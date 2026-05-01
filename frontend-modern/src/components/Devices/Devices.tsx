@@ -52,30 +52,10 @@ const typeIcon = (type?: string) => {
   }
 };
 
-const percentText = (value?: number) =>
-  typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value)}%` : '-';
-
 const latencyText = (device: DeviceInventoryItem) => {
   if (typeof device.latencyMs === 'number') return `${device.latencyMs} ms`;
   if (device.accountType === 'ping') return 'pending';
   return '-';
-};
-
-const throughputText = (rx?: number, tx?: number) => {
-  if (typeof rx !== 'number' && typeof tx !== 'number') return '-';
-  const format = (value?: number) => {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
-    const units = ['bps', 'Kbps', 'Mbps', 'Gbps'];
-    let scaled = value;
-    let unit = 0;
-    while (scaled >= 1000 && unit < units.length - 1) {
-      scaled /= 1000;
-      unit += 1;
-    }
-    const digits = scaled >= 100 || unit === 0 ? 0 : 1;
-    return `${scaled.toFixed(digits)} ${units[unit]}`;
-  };
-  return `${format(rx)} / ${format(tx)}`;
 };
 
 const formatLastSeen = (value?: string) => {
@@ -110,6 +90,7 @@ export const Devices: Component = () => {
   const [unifiError, setUnifiError] = createSignal('');
   const [unifiDevices, setUnifiDevices] = createSignal<DeviceInventoryItem[]>([]);
   const [unifiSearch, setUnifiSearch] = createSignal('');
+  const [debugDevice, setDebugDevice] = createSignal<DeviceInventoryItem | null>(null);
 
   const accounts = createMemo(() => devicesMonitoringStore.accounts().filter((account) => account.enabled));
   const devices = devicesMonitoringStore.devices;
@@ -317,8 +298,8 @@ export const Devices: Component = () => {
 
       <Show when={filteredDevices().length > 0} fallback={<Card padding="lg"><EmptyInventory onAdd={openWizard} /></Card>}>
         <Card padding="none" tone="glass" class="overflow-hidden">
-          <ScrollableTable persistKey="devices-overview" minWidth="1240px" mobileMinWidth="1240px">
-            <table class="w-full border-collapse whitespace-nowrap" style={{ 'table-layout': 'fixed', 'min-width': '1240px' }}>
+          <ScrollableTable persistKey="devices-overview" minWidth="1080px" mobileMinWidth="1080px">
+            <table class="w-full border-collapse whitespace-nowrap" style={{ 'table-layout': 'fixed', 'min-width': '1080px' }}>
               <thead>
                 <tr class="border-b border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-700 dark:bg-gray-700/50 dark:text-gray-300">
                   <th class={`${thClass} text-left pl-4`} style={{ width: '230px' }} onClick={() => handleSort('name')}>
@@ -328,28 +309,31 @@ export const Devices: Component = () => {
                   <th class={thClass} style={{ width: '120px' }} onClick={() => handleSort('source')}>Source {sortIndicator('source')}</th>
                   <th class={thClass} style={{ width: '120px' }} onClick={() => handleSort('status')}>Status {sortIndicator('status')}</th>
                   <th class={thClass} style={{ width: '170px' }}>Address</th>
-                  <th class={thClass} style={{ width: '160px' }}>Model</th>
+                  <th class={thClass} style={{ width: '150px' }}>Model</th>
                   <th class={thClass} style={{ width: '120px' }}>Site</th>
+                  <th class={thClass} style={{ width: '110px' }}>Uptime</th>
                   <th class={thClass} style={{ width: '110px' }} onClick={() => handleSort('latency')}>Latency {sortIndicator('latency')}</th>
                   <th class={thClass} style={{ width: '100px' }}>Loss</th>
-                  <th class={thClass} style={{ width: '90px' }}>CPU</th>
-                  <th class={thClass} style={{ width: '110px' }}>Memory</th>
-                  <th class={thClass} style={{ width: '150px' }}>WAN rx / tx</th>
-                  <th class={thClass} style={{ width: '150px' }}>eth0 rx / tx</th>
                   <th class={thClass} style={{ width: '120px' }}>Last seen</th>
-                  <th class={thClass} style={{ width: '100px' }}></th>
+                  <th class={thClass} style={{ width: '150px' }}></th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
                 <For each={filteredDevices()}>
                   {(device) => (
-                    <DeviceRow device={device} />
+                    <DeviceRow device={device} onDebug={setDebugDevice} />
                   )}
                 </For>
               </tbody>
             </table>
           </ScrollableTable>
         </Card>
+      </Show>
+
+      <Show when={debugDevice()}>
+        {(device) => (
+          <DeviceDebugModal device={device()} onClose={() => setDebugDevice(null)} />
+        )}
       </Show>
 
 
@@ -562,7 +546,7 @@ const FilterButton: Component<{ label: string; active: boolean; onClick: () => v
   </button>
 );
 
-const DeviceRow: Component<{ device: DeviceInventoryItem }> = (props) => {
+const DeviceRow: Component<{ device: DeviceInventoryItem; onDebug: (device: DeviceInventoryItem) => void }> = (props) => {
   const Icon = typeIcon(props.device.type);
   return (
     <tr class="group hover:bg-gray-50 dark:hover:bg-gray-700/30">
@@ -593,17 +577,21 @@ const DeviceRow: Component<{ device: DeviceInventoryItem }> = (props) => {
       <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{props.device.host || '-'}</td>
       <td class="truncate px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{props.device.model || '-'}</td>
       <td class="truncate px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{props.device.site || '-'}</td>
+      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{props.device.uptime || '-'}</td>
       <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{latencyText(props.device)}</td>
       <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">
         {typeof props.device.packetLoss === 'number' ? `${props.device.packetLoss}%` : '-'}
       </td>
-      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{percentText(props.device.cpuUsage)}</td>
-      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{percentText(props.device.memoryUsage)}</td>
-      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{throughputText(props.device.wanRxBps, props.device.wanTxBps)}</td>
-      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{throughputText(props.device.eth0RxBps, props.device.eth0TxBps)}</td>
       <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{formatLastSeen(props.device.lastSeen)}</td>
       <td class="px-3 py-2">
         <div class="flex items-center justify-end gap-1 opacity-80 group-hover:opacity-100">
+          <button
+            type="button"
+            onClick={() => props.onDebug(props.device)}
+            class="rounded px-2 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            Debug
+          </button>
           <button
             type="button"
             onClick={() => devicesMonitoringStore.pollDueDevices(true)}
@@ -622,6 +610,56 @@ const DeviceRow: Component<{ device: DeviceInventoryItem }> = (props) => {
         </div>
       </td>
     </tr>
+  );
+};
+
+const DeviceDebugModal: Component<{ device: DeviceInventoryItem; onClose: () => void }> = (props) => {
+  const debugPayload = () => ({
+    identity: {
+      id: props.device.id,
+      name: props.device.name,
+      source: props.device.accountType,
+      type: props.device.type,
+      address: props.device.host,
+      model: props.device.model,
+      site: props.device.site,
+    },
+    health: {
+      status: props.device.status,
+      uptime: props.device.uptime,
+      uptimeSeconds: props.device.uptimeSeconds,
+      latencyMs: props.device.latencyMs,
+      packetLoss: props.device.packetLoss,
+      lastSeen: props.device.lastSeen,
+      lastCheckedAt: props.device.lastCheckedAt,
+      notes: props.device.notes,
+    },
+    collectedData: props.device.raw ?? {},
+  });
+  return (
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div class="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-lg border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800">
+        <div class="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-700">
+          <div>
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Device debug</h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400">{props.device.name}</p>
+          </div>
+          <button
+            type="button"
+            onClick={props.onClose}
+            class="rounded p-1.5 text-gray-500 transition-colors hover:bg-gray-100 dark:hover:bg-gray-700"
+            aria-label="Close debug"
+          >
+            <X class="h-5 w-5" strokeWidth={2} />
+          </button>
+        </div>
+        <div class="overflow-auto p-5">
+          <pre class="whitespace-pre-wrap rounded-lg border border-gray-200 bg-gray-950 p-4 text-xs leading-relaxed text-gray-100 dark:border-gray-700">
+            {JSON.stringify(debugPayload(), null, 2)}
+          </pre>
+        </div>
+      </div>
+    </div>
   );
 };
 

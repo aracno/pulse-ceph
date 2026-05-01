@@ -3195,7 +3195,7 @@ function DeviceCheckAlertsPanel() {
       headerActions={
         <div class="flex items-center gap-3">
           <span class="text-xs text-gray-500 dark:text-gray-400">
-            {summary().offline ?? 0} offline / {summary().warning ?? 0} warning
+            {summary().offline ?? 0} offline / {summary().uptime ?? 0} uptime / {summary().latency ?? 0} latency / {summary().packetLoss ?? 0} loss
           </span>
           <Toggle
             checked={alerts().enabled}
@@ -3206,6 +3206,41 @@ function DeviceCheckAlertsPanel() {
         </div>
       }
     >
+      <div class="mb-4 grid gap-3 md:grid-cols-4">
+        <DeviceAlertControl
+          title="Online / Offline"
+          description="Alert when a device becomes unreachable."
+          enabled={alerts().offlineEnabled}
+          onToggle={(enabled) => updateAlerts({ offlineEnabled: enabled })}
+        />
+        <DeviceAlertControl
+          title="Uptime"
+          description="Alert when an online device has a short uptime."
+          enabled={alerts().uptimeEnabled}
+          onToggle={(enabled) => updateAlerts({ uptimeEnabled: enabled })}
+          value={Math.round((alerts().uptimeMinSeconds ?? 300) / 60)}
+          suffix="min"
+          onValue={(value) => updateAlerts({ uptimeMinSeconds: Math.max(1, value) * 60 })}
+        />
+        <DeviceAlertControl
+          title="Latency"
+          description="Alert above this latency."
+          enabled={alerts().latencyEnabled}
+          onToggle={(enabled) => updateAlerts({ latencyEnabled: enabled })}
+          value={alerts().latencyWarnMs}
+          suffix="ms"
+          onValue={(value) => updateAlerts({ latencyWarnMs: Math.max(1, value) })}
+        />
+        <DeviceAlertControl
+          title="Loss"
+          description="Alert above this packet loss."
+          enabled={alerts().packetLossEnabled}
+          onToggle={(enabled) => updateAlerts({ packetLossEnabled: enabled })}
+          value={alerts().packetLossWarnPct}
+          suffix="%"
+          onValue={(value) => updateAlerts({ packetLossWarnPct: Math.max(0, value) })}
+        />
+      </div>
       <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
@@ -3215,6 +3250,7 @@ function DeviceCheckAlertsPanel() {
                 <th class="px-4 py-2 text-left">Resource</th>
                 <th class="px-4 py-2 text-left">Type</th>
                 <th class="px-4 py-2 text-left">State</th>
+                <th class="px-4 py-2 text-left">Uptime</th>
                 <th class="px-4 py-2 text-left">Latency ms</th>
                 <th class="px-4 py-2 text-left">Packet loss %</th>
                 <th class="px-4 py-2 text-left">Address</th>
@@ -3237,6 +3273,7 @@ function DeviceCheckAlertsPanel() {
                       <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{device.name}</td>
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.accountType.toUpperCase()}</td>
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.status}</td>
+                      <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.uptime || '-'}</td>
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.latencyMs ?? '-'}</td>
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.packetLoss ?? '-'}</td>
                       <td class="px-4 py-3 text-gray-500 dark:text-gray-400">{device.host || '-'}</td>
@@ -3249,6 +3286,45 @@ function DeviceCheckAlertsPanel() {
         </div>
       </div>
     </CollapsibleSection>
+  );
+}
+
+function DeviceAlertControl(props: {
+  title: string;
+  description: string;
+  enabled: boolean;
+  onToggle: (enabled: boolean) => void;
+  value?: number;
+  suffix?: string;
+  onValue?: (value: number) => void;
+}) {
+  return (
+    <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">{props.title}</div>
+          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{props.description}</div>
+        </div>
+        <Toggle
+          checked={props.enabled}
+          onChange={(event) => props.onToggle(event.currentTarget.checked)}
+          ariaLabel={`Toggle ${props.title} device alerts`}
+          size="sm"
+        />
+      </div>
+      <Show when={props.onValue && props.value !== undefined}>
+        <div class="mt-3 flex items-center gap-2">
+          <input
+            type="number"
+            min="0"
+            value={props.value}
+            onInput={(event) => props.onValue?.(Number(event.currentTarget.value))}
+            class="h-8 min-w-0 flex-1 rounded border border-gray-300 bg-white px-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+          />
+          <span class="text-xs text-gray-500 dark:text-gray-400">{props.suffix}</span>
+        </div>
+      </Show>
+    </div>
   );
 }
 

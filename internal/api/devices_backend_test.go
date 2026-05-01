@@ -17,10 +17,6 @@ func TestNormalizeUniFiDevicesFlattensOfficialEnvelope(t *testing.T) {
 						"productLine": "switch",
 						"status":      "UPDATE_AVAILABLE",
 						"metrics": map[string]any{
-							"cpu":        float64(0.42),
-							"memory":     float64(67),
-							"wanRxBps":   float64(2500000000),
-							"wanTxBps":   float64(640000000),
 							"packetLoss": float64(0.5),
 						},
 						"site": map[string]any{
@@ -66,18 +62,6 @@ func TestNormalizeUniFiDevicesFlattensOfficialEnvelope(t *testing.T) {
 	}
 	if sw.Site != "Homelab" {
 		t.Fatalf("expected site name from nested site, got %q", sw.Site)
-	}
-	if sw.CPUUsage == nil || *sw.CPUUsage != 42 {
-		t.Fatalf("expected fractional cpu to normalize to 42%%, got %#v", sw.CPUUsage)
-	}
-	if sw.MemoryUsage == nil || *sw.MemoryUsage != 67 {
-		t.Fatalf("expected memory metric to be retained, got %#v", sw.MemoryUsage)
-	}
-	if sw.WANRxBps == nil || *sw.WANRxBps != 2500000000 {
-		t.Fatalf("expected WAN rx metric to be retained, got %#v", sw.WANRxBps)
-	}
-	if sw.WANTxBps == nil || *sw.WANTxBps != 640000000 {
-		t.Fatalf("expected WAN tx metric to be retained, got %#v", sw.WANTxBps)
 	}
 	if sw.PacketLoss == nil || *sw.PacketLoss != 0.5 {
 		t.Fatalf("expected UniFi packet loss metric to be retained when exposed, got %#v", sw.PacketLoss)
@@ -163,11 +147,9 @@ func TestNormalizeUniFiDevicesEnrichesHostMetadataAndISPMetrics(t *testing.T) {
 						"metricTime": "2026-05-01T05:35:00Z",
 						"data": map[string]any{
 							"wan": map[string]any{
-								"avgLatency":    float64(55),
-								"packetLoss":    float64(1),
-								"download_kbps": float64(30000),
-								"upload_kbps":   float64(10000),
-								"uptime":        float64(100),
+								"avgLatency": float64(55),
+								"packetLoss": float64(1),
+								"uptime":     float64(100),
 							},
 						},
 					},
@@ -193,14 +175,8 @@ func TestNormalizeUniFiDevicesEnrichesHostMetadataAndISPMetrics(t *testing.T) {
 	if gateway.PacketLoss == nil || *gateway.PacketLoss != 1 {
 		t.Fatalf("expected ISP packet loss metric, got %#v", gateway.PacketLoss)
 	}
-	if gateway.WANRxBps == nil || *gateway.WANRxBps != 30000000 {
-		t.Fatalf("expected download_kbps to convert to bps, got %#v", gateway.WANRxBps)
-	}
-	if gateway.WANTxBps == nil || *gateway.WANTxBps != 10000000 {
-		t.Fatalf("expected upload_kbps to convert to bps, got %#v", gateway.WANTxBps)
-	}
-	if byName["PYXI-SW"].WANRxBps != nil {
-		t.Fatalf("expected switch not to inherit WAN metrics, got %#v", byName["PYXI-SW"].WANRxBps)
+	if byName["PYXI-SW"].LatencyMs != nil {
+		t.Fatalf("expected switch not to inherit gateway latency, got %#v", byName["PYXI-SW"].LatencyMs)
 	}
 }
 

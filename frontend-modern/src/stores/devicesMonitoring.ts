@@ -40,15 +40,10 @@ export interface DeviceInventoryItem {
   model?: string;
   site?: string;
   status: DeviceStatus;
-  cpuUsage?: number;
-  memoryUsage?: number;
   latencyMs?: number;
   packetLoss?: number;
-  wanRxBps?: number;
-  wanTxBps?: number;
-  eth0RxBps?: number;
-  eth0TxBps?: number;
   uptime?: string;
+  uptimeSeconds?: number;
   firmwareVersion?: string;
   lastSeen?: string;
   lastCheckedAt?: string;
@@ -59,12 +54,12 @@ export interface DeviceInventoryItem {
 export interface DeviceAlertSettings {
   enabled: boolean;
   offlineEnabled: boolean;
-  warningEnabled: boolean;
   latencyEnabled: boolean;
   latencyWarnMs: number;
   packetLossEnabled: boolean;
   packetLossWarnPct: number;
-  firmwareEnabled: boolean;
+  uptimeEnabled: boolean;
+  uptimeMinSeconds: number;
   checkOverrides?: Record<string, boolean>;
   deviceOverrides?: Record<string, boolean>;
   lastEvaluatedAt?: string;
@@ -91,12 +86,12 @@ const defaultPingAccount = (): DeviceAccount => ({
 const defaultAlerts = (): DeviceAlertSettings => ({
   enabled: true,
   offlineEnabled: true,
-  warningEnabled: true,
   latencyEnabled: true,
   latencyWarnMs: 150,
   packetLossEnabled: true,
   packetLossWarnPct: 5,
-  firmwareEnabled: true,
+  uptimeEnabled: false,
+  uptimeMinSeconds: 300,
   checkOverrides: {},
   deviceOverrides: {},
 });

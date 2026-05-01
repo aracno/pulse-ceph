@@ -70,15 +70,10 @@ type managedDevice struct {
 	Model           string              `json:"model,omitempty"`
 	Site            string              `json:"site,omitempty"`
 	Status          managedDeviceStatus `json:"status"`
-	CPUUsage        *float64            `json:"cpuUsage,omitempty"`
-	MemoryUsage     *float64            `json:"memoryUsage,omitempty"`
 	LatencyMs       *float64            `json:"latencyMs,omitempty"`
 	PacketLoss      *float64            `json:"packetLoss,omitempty"`
-	WANRxBps        *float64            `json:"wanRxBps,omitempty"`
-	WANTxBps        *float64            `json:"wanTxBps,omitempty"`
-	Eth0RxBps       *float64            `json:"eth0RxBps,omitempty"`
-	Eth0TxBps       *float64            `json:"eth0TxBps,omitempty"`
 	Uptime          string              `json:"uptime,omitempty"`
+	UptimeSeconds   *float64            `json:"uptimeSeconds,omitempty"`
 	FirmwareVersion string              `json:"firmwareVersion,omitempty"`
 	LastSeen        string              `json:"lastSeen,omitempty"`
 	LastCheckedAt   string              `json:"lastCheckedAt,omitempty"`
@@ -89,12 +84,12 @@ type managedDevice struct {
 type deviceAlertSettings struct {
 	Enabled               bool            `json:"enabled"`
 	OfflineEnabled        bool            `json:"offlineEnabled"`
-	WarningEnabled        bool            `json:"warningEnabled"`
 	LatencyEnabled        bool            `json:"latencyEnabled"`
 	LatencyWarnMs         float64         `json:"latencyWarnMs"`
 	PacketLossEnabled     bool            `json:"packetLossEnabled"`
 	PacketLossWarnPct     float64         `json:"packetLossWarnPct"`
-	FirmwareEnabled       bool            `json:"firmwareEnabled"`
+	UptimeEnabled         bool            `json:"uptimeEnabled"`
+	UptimeMinSeconds      float64         `json:"uptimeMinSeconds"`
 	CheckOverrides        map[string]bool `json:"checkOverrides,omitempty"`
 	DeviceOverrides       map[string]bool `json:"deviceOverrides,omitempty"`
 	LastEvaluatedAt       string          `json:"lastEvaluatedAt,omitempty"`
@@ -116,14 +111,12 @@ type devicesStore struct {
 }
 
 type uniFiISPMetric struct {
-	HostID      string
-	SiteID      string
-	MetricTime  string
-	LatencyMs   *float64
-	PacketLoss  *float64
-	DownloadBps *float64
-	UploadBps   *float64
-	WANUptime   *float64
+	HostID     string
+	SiteID     string
+	MetricTime string
+	LatencyMs  *float64
+	PacketLoss *float64
+	WANUptime  *float64
 }
 
 func newDevicesStore(dataPath string) *devicesStore {
@@ -162,12 +155,12 @@ func defaultDeviceAlertSettings() deviceAlertSettings {
 	return deviceAlertSettings{
 		Enabled:           true,
 		OfflineEnabled:    true,
-		WarningEnabled:    true,
 		LatencyEnabled:    true,
 		LatencyWarnMs:     150,
 		PacketLossEnabled: true,
 		PacketLossWarnPct: 5,
-		FirmwareEnabled:   true,
+		UptimeEnabled:     false,
+		UptimeMinSeconds:  300,
 		CheckOverrides:    map[string]bool{},
 		DeviceOverrides:   map[string]bool{},
 	}
@@ -197,6 +190,9 @@ func (s *devicesStore) normalizeLocked() {
 	}
 	if s.state.Alerts.LatencyWarnMs == 0 {
 		s.state.Alerts = defaultDeviceAlertSettings()
+	}
+	if s.state.Alerts.UptimeMinSeconds == 0 {
+		s.state.Alerts.UptimeMinSeconds = 300
 	}
 	if s.state.Alerts.CheckOverrides == nil {
 		s.state.Alerts.CheckOverrides = map[string]bool{}
@@ -431,6 +427,9 @@ func (s *devicesStore) updateAlerts(alerts deviceAlertSettings) error {
 	if alerts.PacketLossWarnPct <= 0 {
 		alerts.PacketLossWarnPct = 5
 	}
+	if alerts.UptimeMinSeconds <= 0 {
+		alerts.UptimeMinSeconds = 300
+	}
 	if alerts.CheckOverrides == nil {
 		alerts.CheckOverrides = map[string]bool{}
 	}
@@ -551,13 +550,18 @@ func (s *devicesStore) discoverUniFi(check deviceCheck) ([]managedDevice, error)
 		return nil, err
 	}
 	devices := normalizeUniFiDevices(body, check.ID, check.SiteFilter)
-	for i := range devices {
-		devices[i].LatencyMs = &apiLatency
-	}
 	if metrics, err := s.fetchUniFiISPMetrics(check); err == nil {
 		applyUniFiISPMetrics(devices, metrics)
 	} else {
 		log.Debug().Err(err).Msg("Unable to fetch UniFi ISP metrics")
+	}
+	for i := range devices {
+		raw := devices[i].Raw
+		if raw == nil {
+			raw = map[string]any{}
+		}
+		raw["_pulseAPILatencyMs"] = apiLatency
+		devices[i].Raw = raw
 	}
 	return devices, nil
 }
@@ -625,15 +629,25 @@ func pollPingDevice(device managedDevice, check deviceCheck) (managedDevice, err
 	packetLoss := float64(samples-successes) / float64(samples) * 100
 	device.PacketLoss = roundedFloatPtr(packetLoss, 1)
 	device.LastCheckedAt = now
+	raw := ensureDeviceRaw(device.Raw)
+	raw["_pulsePing"] = map[string]any{
+		"samples":   samples,
+		"successes": successes,
+		"checkedAt": now,
+	}
 	if successes == 0 {
 		device.Status = deviceOffline
 		device.LatencyMs = nil
+		device.Raw = raw
 		return device, nil
 	}
 	latency := float64(totalLatency.Milliseconds()) / float64(successes)
+	previousStatus := device.Status
 	device.Status = deviceOnline
 	device.LatencyMs = roundedFloatPtr(latency, 1)
+	setOnlineSince(&device, raw, now, previousStatus)
 	device.LastSeen = now
+	device.Raw = raw
 	return device, nil
 }
 
@@ -682,13 +696,7 @@ func pollSNMPDevice(device managedDevice, check deviceCheck) (managedDevice, err
 		return polled, nil
 	}
 	defer params.Conn.Close()
-	if cpu := snmpAverageProcessorLoad(params); cpu != nil {
-		polled.CPUUsage = cpu
-	}
-	if memory := snmpMemoryUsage(params); memory != nil {
-		polled.MemoryUsage = memory
-	}
-	applySNMPEth0Throughput(params, &polled, now)
+	applySNMPUptime(params, &polled)
 	polled.Status = deviceOnline
 	polled.LastSeen = now
 	return polled, nil
@@ -719,114 +727,20 @@ func splitSNMPHostPort(input string) (string, int) {
 	return host, port
 }
 
-func snmpAverageProcessorLoad(params *gosnmp.GoSNMP) *float64 {
-	values := []float64{}
-	_ = params.Walk(".1.3.6.1.2.1.25.3.3.1.2", func(pdu gosnmp.SnmpPDU) error {
-		if value, ok := snmpFloatValue(pdu.Value); ok {
-			values = append(values, value)
-		}
-		return nil
-	})
-	if len(values) == 0 {
-		return nil
-	}
-	var total float64
-	for _, value := range values {
-		total += value
-	}
-	return roundedFloatPtr(total/float64(len(values)), 1)
-}
-
-func snmpMemoryUsage(params *gosnmp.GoSNMP) *float64 {
-	descriptions := map[string]string{}
-	allocationUnits := map[string]float64{}
-	sizes := map[string]float64{}
-	used := map[string]float64{}
-	_ = params.Walk(".1.3.6.1.2.1.25.2.3.1.3", func(pdu gosnmp.SnmpPDU) error {
-		descriptions[oidIndex(pdu.Name)] = strings.ToLower(snmpStringValue(pdu.Value))
-		return nil
-	})
-	_ = params.Walk(".1.3.6.1.2.1.25.2.3.1.4", func(pdu gosnmp.SnmpPDU) error {
-		if value, ok := snmpFloatValue(pdu.Value); ok {
-			allocationUnits[oidIndex(pdu.Name)] = value
-		}
-		return nil
-	})
-	_ = params.Walk(".1.3.6.1.2.1.25.2.3.1.5", func(pdu gosnmp.SnmpPDU) error {
-		if value, ok := snmpFloatValue(pdu.Value); ok {
-			sizes[oidIndex(pdu.Name)] = value
-		}
-		return nil
-	})
-	_ = params.Walk(".1.3.6.1.2.1.25.2.3.1.6", func(pdu gosnmp.SnmpPDU) error {
-		if value, ok := snmpFloatValue(pdu.Value); ok {
-			used[oidIndex(pdu.Name)] = value
-		}
-		return nil
-	})
-	for index, description := range descriptions {
-		if !strings.Contains(description, "memory") && !strings.Contains(description, "ram") {
-			continue
-		}
-		size := sizes[index] * allocationUnits[index]
-		usedBytes := used[index] * allocationUnits[index]
-		if size > 0 {
-			return roundedFloatPtr(usedBytes/size*100, 1)
-		}
-	}
-	return nil
-}
-
-func applySNMPEth0Throughput(params *gosnmp.GoSNMP, device *managedDevice, checkedAt string) {
-	index := snmpInterfaceIndex(params, "eth0")
-	if index == "" {
+func applySNMPUptime(params *gosnmp.GoSNMP, device *managedDevice) {
+	uptimeTicks := snmpGetFloat(params, ".1.3.6.1.2.1.1.3.0")
+	if uptimeTicks == nil {
 		return
 	}
-	inOctets := snmpGetFloat(params, ".1.3.6.1.2.1.31.1.1.1.6."+index)
-	outOctets := snmpGetFloat(params, ".1.3.6.1.2.1.31.1.1.1.10."+index)
-	if inOctets == nil || outOctets == nil {
-		inOctets = snmpGetFloat(params, ".1.3.6.1.2.1.2.2.1.10."+index)
-		outOctets = snmpGetFloat(params, ".1.3.6.1.2.1.2.2.1.16."+index)
-	}
-	if inOctets == nil || outOctets == nil {
-		return
-	}
-	raw := device.Raw
-	if raw == nil {
-		raw = map[string]any{}
-	}
-	previous := mapValue(raw, "snmpEth0Counters")
-	if previous != nil {
-		if previousAt, err := time.Parse(time.RFC3339, stringValue(previous, "checkedAt")); err == nil {
-			if currentAt, err := time.Parse(time.RFC3339, checkedAt); err == nil && currentAt.After(previousAt) {
-				seconds := currentAt.Sub(previousAt).Seconds()
-				prevIn, inOK := numberValue(previous, "inOctets")
-				prevOut, outOK := numberValue(previous, "outOctets")
-				if seconds > 0 && inOK && outOK && *inOctets >= prevIn && *outOctets >= prevOut {
-					device.Eth0RxBps = roundedFloatPtr((*inOctets-prevIn)*8/seconds, 1)
-					device.Eth0TxBps = roundedFloatPtr((*outOctets-prevOut)*8/seconds, 1)
-				}
-			}
-		}
-	}
-	raw["snmpEth0Counters"] = map[string]any{
-		"checkedAt": checkedAt,
-		"inOctets":  *inOctets,
-		"outOctets": *outOctets,
+	uptimeSeconds := *uptimeTicks / 100
+	device.UptimeSeconds = roundedFloatPtr(uptimeSeconds, 1)
+	device.Uptime = formatDurationSeconds(uptimeSeconds)
+	raw := ensureDeviceRaw(device.Raw)
+	raw["_pulseSNMP"] = map[string]any{
+		"sysUpTimeTicks": *uptimeTicks,
+		"sysUpTimeOID":   ".1.3.6.1.2.1.1.3.0",
 	}
 	device.Raw = raw
-}
-
-func snmpInterfaceIndex(params *gosnmp.GoSNMP, name string) string {
-	var index string
-	_ = params.Walk(".1.3.6.1.2.1.2.2.1.2", func(pdu gosnmp.SnmpPDU) error {
-		if strings.EqualFold(strings.TrimSpace(snmpStringValue(pdu.Value)), name) {
-			index = oidIndex(pdu.Name)
-			return fmt.Errorf("found")
-		}
-		return nil
-	})
-	return index
 }
 
 func snmpGetFloat(params *gosnmp.GoSNMP, oid string) *float64 {
@@ -860,25 +774,6 @@ func snmpFloatValue(input any) (float64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func snmpStringValue(input any) string {
-	switch value := input.(type) {
-	case string:
-		return strings.TrimSpace(value)
-	case []byte:
-		return strings.TrimSpace(string(value))
-	default:
-		return strings.TrimSpace(fmt.Sprint(value))
-	}
-}
-
-func oidIndex(oid string) string {
-	parts := strings.Split(strings.Trim(oid, "."), ".")
-	if len(parts) == 0 {
-		return ""
-	}
-	return parts[len(parts)-1]
 }
 
 func mergeUniFiDevice(current managedDevice, discovered []managedDevice) managedDevice {
@@ -929,7 +824,7 @@ func unifiMatch(a, b managedDevice) bool {
 func (s *devicesStore) evaluateDeviceAlerts() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	summary := map[string]int{"offline": 0, "warning": 0, "latency": 0, "packetLoss": 0}
+	summary := map[string]int{"offline": 0, "uptime": 0, "latency": 0, "packetLoss": 0}
 	cfg := s.state.Alerts
 	if cfg.Enabled {
 		for _, device := range s.state.Devices {
@@ -939,14 +834,14 @@ func (s *devicesStore) evaluateDeviceAlerts() {
 			if cfg.OfflineEnabled && device.Status == deviceOffline {
 				summary["offline"]++
 			}
-			if cfg.WarningEnabled && device.Status == deviceWarning {
-				summary["warning"]++
-			}
 			if cfg.LatencyEnabled && device.LatencyMs != nil && *device.LatencyMs >= cfg.LatencyWarnMs {
 				summary["latency"]++
 			}
 			if cfg.PacketLossEnabled && device.PacketLoss != nil && *device.PacketLoss >= cfg.PacketLossWarnPct {
 				summary["packetLoss"]++
+			}
+			if cfg.UptimeEnabled && device.Status == deviceOnline && device.UptimeSeconds != nil && *device.UptimeSeconds <= cfg.UptimeMinSeconds {
+				summary["uptime"]++
 			}
 		}
 	}
@@ -999,8 +894,6 @@ func normalizeUniFiISPMetrics(payload any) map[string]uniFiISPMetric {
 		}
 		data := mapValue(period, "data")
 		wan := mapValue(data, "wan")
-		downloadKbps, hasDownload := numberValue(wan, "download_kbps")
-		uploadKbps, hasUpload := numberValue(wan, "upload_kbps")
 		metric := uniFiISPMetric{
 			HostID:     hostID,
 			SiteID:     stringValue(record, "siteId"),
@@ -1008,12 +901,6 @@ func normalizeUniFiISPMetrics(payload any) map[string]uniFiISPMetric {
 			LatencyMs:  numberFromPaths(wan, [][]string{{"avgLatency"}, {"latency"}, {"averageLatency"}}),
 			PacketLoss: numberFromPaths(wan, [][]string{{"packetLoss"}, {"packet_loss"}}),
 			WANUptime:  numberFromPaths(wan, [][]string{{"uptime"}, {"wanUptime"}}),
-		}
-		if hasDownload {
-			metric.DownloadBps = roundedFloatPtr(downloadKbps*1000, 1)
-		}
-		if hasUpload {
-			metric.UploadBps = roundedFloatPtr(uploadKbps*1000, 1)
 		}
 		metrics[hostID] = metric
 	}
@@ -1079,22 +966,14 @@ func applyUniFiISPMetrics(devices []managedDevice, metrics map[string]uniFiISPMe
 		if metric.PacketLoss != nil {
 			devices[i].PacketLoss = metric.PacketLoss
 		}
-		if metric.DownloadBps != nil {
-			devices[i].WANRxBps = metric.DownloadBps
-		}
-		if metric.UploadBps != nil {
-			devices[i].WANTxBps = metric.UploadBps
-		}
 		raw := devices[i].Raw
 		if raw == nil {
 			raw = map[string]any{}
 		}
 		raw["_pulseIspMetrics"] = map[string]any{
-			"siteId":      metric.SiteID,
-			"metricTime":  metric.MetricTime,
-			"wanUptime":   metric.WANUptime,
-			"downloadBps": metric.DownloadBps,
-			"uploadBps":   metric.UploadBps,
+			"siteId":     metric.SiteID,
+			"metricTime": metric.MetricTime,
+			"wanUptime":  metric.WANUptime,
 		}
 		devices[i].Raw = raw
 	}
@@ -1238,21 +1117,15 @@ func normalizeUniFiRecord(record map[string]any, accountID string, index int) ma
 	if name == "" {
 		name = firstNonEmpty(model, host, fmt.Sprintf("UniFi device %d", index+1))
 	}
-	cpuUsage := percentFromPaths(record, [][]string{
-		{"cpu"}, {"cpuUsage"}, {"cpuUtilization"}, {"systemStats", "cpu"}, {"metrics", "cpu"}, {"reportedState", "cpu"},
-	})
-	memoryUsage := percentFromPaths(record, [][]string{
-		{"memory"}, {"memoryUsage"}, {"mem"}, {"memUsage"}, {"systemStats", "memory"}, {"systemStats", "mem"}, {"metrics", "memory"}, {"reportedState", "memory"},
-	})
 	packetLoss := numberFromPaths(record, [][]string{
 		{"packetLoss"}, {"packet_loss"}, {"wan", "packetLoss"}, {"metrics", "packetLoss"}, {"uplink", "packetLoss"},
 	})
-	wanRxBps := numberFromPaths(record, [][]string{
-		{"wanRxBps"}, {"wanDownloadBps"}, {"downloadBps"}, {"rxBps"}, {"wan", "rxBps"}, {"wan", "downloadBps"}, {"metrics", "wanRxBps"}, {"metrics", "downloadBps"}, {"uplink", "rxBps"},
-	})
-	wanTxBps := numberFromPaths(record, [][]string{
-		{"wanTxBps"}, {"wanUploadBps"}, {"uploadBps"}, {"txBps"}, {"wan", "txBps"}, {"wan", "uploadBps"}, {"metrics", "wanTxBps"}, {"metrics", "uploadBps"}, {"uplink", "txBps"},
-	})
+	startupTime := stringValue(record, "startupTime")
+	uptimeSeconds := uptimeSecondsFromTimestamp(startupTime)
+	uptime := ""
+	if uptimeSeconds != nil {
+		uptime = formatDurationSeconds(*uptimeSeconds)
+	}
 	return managedDevice{
 		ID:              utils.GenerateID("unifi-device"),
 		AccountID:       accountID,
@@ -1264,11 +1137,9 @@ func normalizeUniFiRecord(record map[string]any, accountID string, index int) ma
 		Model:           model,
 		Site:            firstNonEmpty(stringValue(record, "siteName"), stringValue(record, "siteId"), stringValue(site, "name"), stringValue(site, "desc")),
 		Status:          status,
-		CPUUsage:        cpuUsage,
-		MemoryUsage:     memoryUsage,
 		PacketLoss:      packetLoss,
-		WANRxBps:        wanRxBps,
-		WANTxBps:        wanTxBps,
+		Uptime:          uptime,
+		UptimeSeconds:   uptimeSeconds,
 		FirmwareVersion: firstNonEmpty(stringValue(record, "version"), stringValue(record, "firmwareVersion"), stringValue(record, "firmware")),
 		LastSeen:        firstNonEmpty(stringValue(record, "lastSeen"), stringValue(record, "lastConnectionStateChange")),
 		Raw:             record,
@@ -1380,24 +1251,6 @@ func numberFromPaths(record map[string]any, paths [][]string) *float64 {
 	return nil
 }
 
-func percentFromPaths(record map[string]any, paths [][]string) *float64 {
-	for _, path := range paths {
-		if value, ok := numberFromPath(record, path); ok {
-			if value >= 0 && value <= 1 {
-				value *= 100
-			}
-			if value < 0 {
-				value = 0
-			}
-			if value > 100 {
-				value = 100
-			}
-			return roundedFloatPtr(value, 1)
-		}
-	}
-	return nil
-}
-
 func roundedFloatPtr(value float64, precision int) *float64 {
 	if precision < 0 {
 		precision = 0
@@ -1430,4 +1283,59 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func ensureDeviceRaw(raw map[string]any) map[string]any {
+	if raw != nil {
+		return raw
+	}
+	return map[string]any{}
+}
+
+func setOnlineSince(device *managedDevice, raw map[string]any, checkedAt string, previousStatus managedDeviceStatus) {
+	onlineSince := stringValue(raw, "_pulseOnlineSince")
+	if previousStatus != deviceOnline || onlineSince == "" {
+		onlineSince = checkedAt
+		raw["_pulseOnlineSince"] = onlineSince
+	}
+	if parsed, err := time.Parse(time.RFC3339, onlineSince); err == nil {
+		seconds := time.Since(parsed).Seconds()
+		if seconds < 0 {
+			seconds = 0
+		}
+		device.UptimeSeconds = roundedFloatPtr(seconds, 1)
+		device.Uptime = formatDurationSeconds(seconds)
+	}
+}
+
+func uptimeSecondsFromTimestamp(value string) *float64 {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return nil
+	}
+	seconds := time.Since(parsed).Seconds()
+	if seconds < 0 {
+		seconds = 0
+	}
+	return roundedFloatPtr(seconds, 1)
+}
+
+func formatDurationSeconds(seconds float64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	duration := time.Duration(seconds) * time.Second
+	days := int(duration.Hours()) / 24
+	hours := int(duration.Hours()) % 24
+	minutes := int(duration.Minutes()) % 60
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh", days, hours)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
