@@ -14,6 +14,10 @@
 
 ---
 
+Issue-first contribution policy: please open an issue or discussion before
+investing time in a code change. External pull requests are not part of the
+normal contribution flow for this repository. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## 🚀 Overview
 
 Pulse is a modern, unified dashboard for monitoring your **infrastructure** across Proxmox, Docker, and Kubernetes. It consolidates metrics, alerts, and AI-powered insights from all your systems into a single, beautiful interface.
