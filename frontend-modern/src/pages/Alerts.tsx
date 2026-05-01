@@ -3172,6 +3172,30 @@ function DeviceCheckAlertsPanel() {
   const updateAlerts = (patch: Partial<ReturnType<typeof alerts>>) => {
     void devicesMonitoringStore.updateAlerts(patch);
   };
+  const setNumericThreshold = (
+    key: 'uptime' | 'latency' | 'packetLoss',
+    value: number,
+  ) => {
+    const normalized = Number.isFinite(value) ? Math.max(0, value) : 0;
+    if (key === 'uptime') {
+      updateAlerts({
+        uptimeEnabled: normalized > 0,
+        uptimeMinSeconds: normalized * 60,
+      });
+      return;
+    }
+    if (key === 'latency') {
+      updateAlerts({
+        latencyEnabled: normalized > 0,
+        latencyWarnMs: normalized,
+      });
+      return;
+    }
+    updateAlerts({
+      packetLossEnabled: normalized > 0,
+      packetLossWarnPct: normalized,
+    });
+  };
   const updateDeviceOverride = (id: string, disabled: boolean) => {
     updateAlerts({
       deviceOverrides: {
@@ -3206,57 +3230,104 @@ function DeviceCheckAlertsPanel() {
         </div>
       }
     >
-      <div class="mb-4 grid gap-3 md:grid-cols-4">
-        <DeviceAlertControl
-          title="Online / Offline"
-          description="Alert when a device becomes unreachable."
-          enabled={alerts().offlineEnabled}
-          onToggle={(enabled) => updateAlerts({ offlineEnabled: enabled })}
-        />
-        <DeviceAlertControl
-          title="Uptime"
-          description="Alert when an online device has a short uptime."
-          enabled={alerts().uptimeEnabled}
-          onToggle={(enabled) => updateAlerts({ uptimeEnabled: enabled })}
-          value={Math.round((alerts().uptimeMinSeconds ?? 300) / 60)}
-          suffix="min"
-          onValue={(value) => updateAlerts({ uptimeMinSeconds: Math.max(1, value) * 60 })}
-        />
-        <DeviceAlertControl
-          title="Latency"
-          description="Alert above this latency."
-          enabled={alerts().latencyEnabled}
-          onToggle={(enabled) => updateAlerts({ latencyEnabled: enabled })}
-          value={alerts().latencyWarnMs}
-          suffix="ms"
-          onValue={(value) => updateAlerts({ latencyWarnMs: Math.max(1, value) })}
-        />
-        <DeviceAlertControl
-          title="Loss"
-          description="Alert above this packet loss."
-          enabled={alerts().packetLossEnabled}
-          onToggle={(enabled) => updateAlerts({ packetLossEnabled: enabled })}
-          value={alerts().packetLossWarnPct}
-          suffix="%"
-          onValue={(value) => updateAlerts({ packetLossWarnPct: Math.max(0, value) })}
-        />
-      </div>
       <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
         <div class="overflow-x-auto">
-          <table class="w-full text-sm">
+          <table class="w-full min-w-[1040px] table-fixed text-sm">
+            <colgroup>
+              <col class="w-[72px]" />
+              <col class="w-[240px]" />
+              <col class="w-[110px]" />
+              <col class="w-[110px]" />
+              <col class="w-[135px]" />
+              <col class="w-[120px]" />
+              <col class="w-[130px]" />
+              <col class="w-[120px]" />
+              <col class="w-[120px]" />
+              <col class="w-[120px]" />
+            </colgroup>
             <thead class="bg-gray-50 text-xs font-semibold uppercase tracking-normal text-gray-500 dark:bg-gray-900/60 dark:text-gray-400">
               <tr>
-                <th class="w-20 px-4 py-2 text-left">Alerts</th>
+                <th class="px-4 py-2 text-left">Alerts</th>
                 <th class="px-4 py-2 text-left">Resource</th>
                 <th class="px-4 py-2 text-left">Type</th>
                 <th class="px-4 py-2 text-left">State</th>
+                <th class="px-4 py-2 text-left">Offline Alerts</th>
                 <th class="px-4 py-2 text-left">Uptime</th>
+                <th class="px-4 py-2 text-left">Uptime Alerts</th>
                 <th class="px-4 py-2 text-left">Latency ms</th>
-                <th class="px-4 py-2 text-left">Packet loss %</th>
-                <th class="px-4 py-2 text-left">Address</th>
+                <th class="px-4 py-2 text-left">Latency Alert</th>
+                <th class="px-4 py-2 text-left">Loss Alert</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+              <tr class="bg-gray-50/70 dark:bg-gray-800/50">
+                <td class="px-4 py-3">
+                  <Toggle
+                    checked={alerts().enabled}
+                    onChange={(event) => updateAlerts({ enabled: event.currentTarget.checked })}
+                    ariaLabel="Toggle all device alerts"
+                    size="sm"
+                  />
+                </td>
+                <td class="px-4 py-3 font-semibold text-gray-900 dark:text-gray-100">
+                  <span>Global Defaults</span>
+                  <span class="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
+                    Devices
+                  </span>
+                </td>
+                <td class="px-4 py-3 text-gray-500 dark:text-gray-400">All</td>
+                <td class="px-4 py-3 text-gray-500 dark:text-gray-400">Inherited</td>
+                <td class="px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={() => updateAlerts({ offlineEnabled: !alerts().offlineEnabled })}
+                    class={`rounded px-2 py-0.5 text-xs font-semibold ${alerts().offlineEnabled
+                      ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                      : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
+                      }`}
+                  >
+                    {alerts().offlineEnabled ? 'Warn' : 'Off'}
+                  </button>
+                </td>
+                <td class="px-4 py-3 text-gray-500 dark:text-gray-400">Minimum</td>
+                <td class="px-4 py-3">
+                  <div class="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="0"
+                      value={alerts().uptimeEnabled ? Math.round((alerts().uptimeMinSeconds ?? 0) / 60) : 0}
+                      onInput={(event) => setNumericThreshold('uptime', Number(event.currentTarget.value))}
+                      class="h-8 w-20 rounded border border-gray-300 bg-white px-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                    />
+                    <span class="text-xs text-gray-500 dark:text-gray-400">min</span>
+                  </div>
+                </td>
+                <td class="px-4 py-3 text-gray-500 dark:text-gray-400">Above</td>
+                <td class="px-4 py-3">
+                  <div class="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="0"
+                      value={alerts().latencyEnabled ? alerts().latencyWarnMs : 0}
+                      onInput={(event) => setNumericThreshold('latency', Number(event.currentTarget.value))}
+                      class="h-8 w-20 rounded border border-gray-300 bg-white px-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                    />
+                    <span class="text-xs text-gray-500 dark:text-gray-400">ms</span>
+                  </div>
+                </td>
+                <td class="px-4 py-3">
+                  <div class="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="0"
+                      value={alerts().packetLossEnabled ? alerts().packetLossWarnPct : 0}
+                      onInput={(event) => setNumericThreshold('packetLoss', Number(event.currentTarget.value))}
+                      class="h-8 w-20 rounded border border-gray-300 bg-white px-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                    />
+                    <span class="text-xs text-gray-500 dark:text-gray-400">%</span>
+                  </div>
+                </td>
+              </tr>
               <For each={devices()}>
                 {(device) => {
                   const enabled = () => !(alerts().deviceOverrides ?? {})[device.id];
@@ -3273,10 +3344,47 @@ function DeviceCheckAlertsPanel() {
                       <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{device.name}</td>
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.accountType.toUpperCase()}</td>
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.status}</td>
+                      <td class="px-4 py-3">
+                        <span class={`rounded px-2 py-0.5 text-xs font-semibold ${alerts().offlineEnabled
+                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                          : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
+                          }`}>
+                          {alerts().offlineEnabled ? 'Warn' : 'Off'}
+                        </span>
+                      </td>
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.uptime || '-'}</td>
-                      <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.latencyMs ?? '-'}</td>
-                      <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.packetLoss ?? '-'}</td>
-                      <td class="px-4 py-3 text-gray-500 dark:text-gray-400">{device.host || '-'}</td>
+                      <td class="px-4 py-3">
+                        <span class={`rounded px-2 py-0.5 text-xs font-semibold ${alerts().uptimeEnabled
+                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                          : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
+                          }`}>
+                          {alerts().uptimeEnabled ? `${Math.round((alerts().uptimeMinSeconds ?? 0) / 60)}m` : 'Off'}
+                        </span>
+                      </td>
+                      <td class="px-4 py-3 text-gray-700 dark:text-gray-300">
+                        {device.latencyMs !== undefined ? `${device.latencyMs}` : '-'}
+                      </td>
+                      <td class="px-4 py-3">
+                        <span class={`rounded px-2 py-0.5 text-xs font-semibold ${alerts().latencyEnabled
+                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                          : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
+                          }`}>
+                          {alerts().latencyEnabled ? `${alerts().latencyWarnMs} ms` : 'Off'}
+                        </span>
+                      </td>
+                      <td class="px-4 py-3">
+                        <div class="flex items-center justify-between gap-2">
+                          <span class="text-gray-700 dark:text-gray-300">
+                            {device.packetLoss !== undefined ? `${device.packetLoss}%` : '-'}
+                          </span>
+                          <span class={`rounded px-2 py-0.5 text-xs font-semibold ${alerts().packetLossEnabled
+                            ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                            : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
+                            }`}>
+                            {alerts().packetLossEnabled ? `${alerts().packetLossWarnPct}%` : 'Off'}
+                          </span>
+                        </div>
+                      </td>
                     </tr>
                   );
                 }}
@@ -3286,45 +3394,6 @@ function DeviceCheckAlertsPanel() {
         </div>
       </div>
     </CollapsibleSection>
-  );
-}
-
-function DeviceAlertControl(props: {
-  title: string;
-  description: string;
-  enabled: boolean;
-  onToggle: (enabled: boolean) => void;
-  value?: number;
-  suffix?: string;
-  onValue?: (value: number) => void;
-}) {
-  return (
-    <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-      <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0">
-          <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">{props.title}</div>
-          <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{props.description}</div>
-        </div>
-        <Toggle
-          checked={props.enabled}
-          onChange={(event) => props.onToggle(event.currentTarget.checked)}
-          ariaLabel={`Toggle ${props.title} device alerts`}
-          size="sm"
-        />
-      </div>
-      <Show when={props.onValue && props.value !== undefined}>
-        <div class="mt-3 flex items-center gap-2">
-          <input
-            type="number"
-            min="0"
-            value={props.value}
-            onInput={(event) => props.onValue?.(Number(event.currentTarget.value))}
-            class="h-8 min-w-0 flex-1 rounded border border-gray-300 bg-white px-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
-          />
-          <span class="text-xs text-gray-500 dark:text-gray-400">{props.suffix}</span>
-        </div>
-      </Show>
-    </div>
   );
 }
 

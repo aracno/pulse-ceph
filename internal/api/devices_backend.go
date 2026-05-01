@@ -188,10 +188,13 @@ func (s *devicesStore) normalizeLocked() {
 	if len(s.state.Checks) == 0 {
 		s.state.Checks = []deviceCheck{defaultDeviceCheck()}
 	}
-	if s.state.Alerts.LatencyWarnMs == 0 {
-		s.state.Alerts = defaultDeviceAlertSettings()
+	if s.state.Alerts.LatencyEnabled && s.state.Alerts.LatencyWarnMs <= 0 {
+		s.state.Alerts.LatencyWarnMs = 150
 	}
-	if s.state.Alerts.UptimeMinSeconds == 0 {
+	if s.state.Alerts.PacketLossEnabled && s.state.Alerts.PacketLossWarnPct <= 0 {
+		s.state.Alerts.PacketLossWarnPct = 5
+	}
+	if s.state.Alerts.UptimeEnabled && s.state.Alerts.UptimeMinSeconds <= 0 {
 		s.state.Alerts.UptimeMinSeconds = 300
 	}
 	if s.state.Alerts.CheckOverrides == nil {
@@ -421,13 +424,13 @@ func (s *devicesStore) deleteDevice(id string) error {
 func (s *devicesStore) updateAlerts(alerts deviceAlertSettings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if alerts.LatencyWarnMs <= 0 {
+	if alerts.LatencyEnabled && alerts.LatencyWarnMs <= 0 {
 		alerts.LatencyWarnMs = 150
 	}
-	if alerts.PacketLossWarnPct <= 0 {
+	if alerts.PacketLossEnabled && alerts.PacketLossWarnPct <= 0 {
 		alerts.PacketLossWarnPct = 5
 	}
-	if alerts.UptimeMinSeconds <= 0 {
+	if alerts.UptimeEnabled && alerts.UptimeMinSeconds <= 0 {
 		alerts.UptimeMinSeconds = 300
 	}
 	if alerts.CheckOverrides == nil {

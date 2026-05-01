@@ -233,3 +233,30 @@ func TestDevicesStorePersistsAndRedactsSecrets(t *testing.T) {
 		t.Fatalf("expected persisted secret for backend routines, got %q", check.APIKey)
 	}
 }
+
+func TestDevicesStoreAllowsZeroDeviceAlertThresholdsWhenDisabled(t *testing.T) {
+	store := newDevicesStore(t.TempDir())
+
+	cfg := defaultDeviceAlertSettings()
+	cfg.LatencyEnabled = false
+	cfg.LatencyWarnMs = 0
+	cfg.PacketLossEnabled = false
+	cfg.PacketLossWarnPct = 0
+	cfg.UptimeEnabled = false
+	cfg.UptimeMinSeconds = 0
+
+	if err := store.updateAlerts(cfg); err != nil {
+		t.Fatalf("update alerts: %v", err)
+	}
+
+	saved := store.snapshot().Alerts
+	if saved.LatencyEnabled || saved.LatencyWarnMs != 0 {
+		t.Fatalf("expected latency threshold to stay disabled at 0, got enabled=%v value=%v", saved.LatencyEnabled, saved.LatencyWarnMs)
+	}
+	if saved.PacketLossEnabled || saved.PacketLossWarnPct != 0 {
+		t.Fatalf("expected packet loss threshold to stay disabled at 0, got enabled=%v value=%v", saved.PacketLossEnabled, saved.PacketLossWarnPct)
+	}
+	if saved.UptimeEnabled || saved.UptimeMinSeconds != 0 {
+		t.Fatalf("expected uptime threshold to stay disabled at 0, got enabled=%v value=%v", saved.UptimeEnabled, saved.UptimeMinSeconds)
+	}
+}

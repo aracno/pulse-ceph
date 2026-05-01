@@ -96,6 +96,10 @@ Configurable alert controls:
 - Per-check alert enable/disable.
 - Per-device alert enable/disable.
 
+For the numeric thresholds, `0` disables that metric family. For example, setting
+latency to `0` disables latency alerts while keeping offline and packet loss alerts
+available.
+
 The backend evaluates these settings after each poll and persists the latest summary. This keeps the behavior aligned with the existing Pulse alerting model: broad family switches first, then targeted overrides.
 
 ## SNMP Notes
