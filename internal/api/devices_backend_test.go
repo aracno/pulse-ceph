@@ -260,3 +260,47 @@ func TestDevicesStoreAllowsZeroDeviceAlertThresholdsWhenDisabled(t *testing.T) {
 		t.Fatalf("expected uptime threshold to stay disabled at 0, got enabled=%v value=%v", saved.UptimeEnabled, saved.UptimeMinSeconds)
 	}
 }
+
+func TestDevicesStoreEvaluatesPerDeviceAlertRules(t *testing.T) {
+	store := newDevicesStore(t.TempDir())
+	latency := 250.0
+	loss := 10.0
+	uptime := 300.0
+	store.state.Devices = []managedDevice{
+		{
+			ID:            "device-1",
+			AccountID:     "account-ping-default",
+			AccountType:   deviceCheckPing,
+			Name:          "Switch",
+			Status:        deviceOnline,
+			LatencyMs:     &latency,
+			PacketLoss:    &loss,
+			UptimeSeconds: &uptime,
+		},
+	}
+
+	latencyWarn := 300.0
+	uptimeEnabled := true
+	uptimeWindow := 600.0
+	packetLossEnabled := false
+	store.state.Alerts.DeviceRules = map[string]deviceAlertRule{
+		"device-1": {
+			LatencyWarnMs:     &latencyWarn,
+			UptimeEnabled:     &uptimeEnabled,
+			UptimeMinSeconds:  &uptimeWindow,
+			PacketLossEnabled: &packetLossEnabled,
+		},
+	}
+
+	store.evaluateDeviceAlerts()
+	summary := store.snapshot().Alerts.LastEvaluationSummary
+	if summary["uptime"] != 1 {
+		t.Fatalf("expected uptime alert for uptime inside 0-threshold window, got %#v", summary)
+	}
+	if summary["latency"] != 0 {
+		t.Fatalf("expected per-device latency threshold to suppress latency alert, got %#v", summary)
+	}
+	if summary["packetLoss"] != 0 {
+		t.Fatalf("expected per-device packet loss disable to suppress loss alert, got %#v", summary)
+	}
+}

@@ -82,18 +82,29 @@ type managedDevice struct {
 }
 
 type deviceAlertSettings struct {
-	Enabled               bool            `json:"enabled"`
-	OfflineEnabled        bool            `json:"offlineEnabled"`
-	LatencyEnabled        bool            `json:"latencyEnabled"`
-	LatencyWarnMs         float64         `json:"latencyWarnMs"`
-	PacketLossEnabled     bool            `json:"packetLossEnabled"`
-	PacketLossWarnPct     float64         `json:"packetLossWarnPct"`
-	UptimeEnabled         bool            `json:"uptimeEnabled"`
-	UptimeMinSeconds      float64         `json:"uptimeMinSeconds"`
-	CheckOverrides        map[string]bool `json:"checkOverrides,omitempty"`
-	DeviceOverrides       map[string]bool `json:"deviceOverrides,omitempty"`
-	LastEvaluatedAt       string          `json:"lastEvaluatedAt,omitempty"`
-	LastEvaluationSummary map[string]int  `json:"lastEvaluationSummary,omitempty"`
+	Enabled               bool                       `json:"enabled"`
+	OfflineEnabled        bool                       `json:"offlineEnabled"`
+	LatencyEnabled        bool                       `json:"latencyEnabled"`
+	LatencyWarnMs         float64                    `json:"latencyWarnMs"`
+	PacketLossEnabled     bool                       `json:"packetLossEnabled"`
+	PacketLossWarnPct     float64                    `json:"packetLossWarnPct"`
+	UptimeEnabled         bool                       `json:"uptimeEnabled"`
+	UptimeMinSeconds      float64                    `json:"uptimeMinSeconds"`
+	CheckOverrides        map[string]bool            `json:"checkOverrides,omitempty"`
+	DeviceOverrides       map[string]bool            `json:"deviceOverrides,omitempty"`
+	DeviceRules           map[string]deviceAlertRule `json:"deviceRules,omitempty"`
+	LastEvaluatedAt       string                     `json:"lastEvaluatedAt,omitempty"`
+	LastEvaluationSummary map[string]int             `json:"lastEvaluationSummary,omitempty"`
+}
+
+type deviceAlertRule struct {
+	OfflineEnabled    *bool    `json:"offlineEnabled,omitempty"`
+	UptimeEnabled     *bool    `json:"uptimeEnabled,omitempty"`
+	UptimeMinSeconds  *float64 `json:"uptimeMinSeconds,omitempty"`
+	LatencyEnabled    *bool    `json:"latencyEnabled,omitempty"`
+	LatencyWarnMs     *float64 `json:"latencyWarnMs,omitempty"`
+	PacketLossEnabled *bool    `json:"packetLossEnabled,omitempty"`
+	PacketLossWarnPct *float64 `json:"packetLossWarnPct,omitempty"`
 }
 
 type devicesState struct {
@@ -163,6 +174,7 @@ func defaultDeviceAlertSettings() deviceAlertSettings {
 		UptimeMinSeconds:  300,
 		CheckOverrides:    map[string]bool{},
 		DeviceOverrides:   map[string]bool{},
+		DeviceRules:       map[string]deviceAlertRule{},
 	}
 }
 
@@ -202,6 +214,9 @@ func (s *devicesStore) normalizeLocked() {
 	}
 	if s.state.Alerts.DeviceOverrides == nil {
 		s.state.Alerts.DeviceOverrides = map[string]bool{}
+	}
+	if s.state.Alerts.DeviceRules == nil {
+		s.state.Alerts.DeviceRules = map[string]deviceAlertRule{}
 	}
 	for i := range s.state.Checks {
 		check := &s.state.Checks[i]
@@ -269,12 +284,21 @@ func cloneDevicesState(state devicesState) devicesState {
 	out.Devices = append([]managedDevice(nil), state.Devices...)
 	out.Alerts.CheckOverrides = cloneBoolMap(state.Alerts.CheckOverrides)
 	out.Alerts.DeviceOverrides = cloneBoolMap(state.Alerts.DeviceOverrides)
+	out.Alerts.DeviceRules = cloneDeviceRuleMap(state.Alerts.DeviceRules)
 	out.Alerts.LastEvaluationSummary = cloneIntMap(state.Alerts.LastEvaluationSummary)
 	return out
 }
 
 func cloneBoolMap(input map[string]bool) map[string]bool {
 	out := map[string]bool{}
+	for k, v := range input {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneDeviceRuleMap(input map[string]deviceAlertRule) map[string]deviceAlertRule {
+	out := map[string]deviceAlertRule{}
 	for k, v := range input {
 		out[k] = v
 	}
@@ -418,6 +442,7 @@ func (s *devicesStore) deleteDevice(id string) error {
 	}
 	s.state.Devices = devices
 	delete(s.state.Alerts.DeviceOverrides, id)
+	delete(s.state.Alerts.DeviceRules, id)
 	return s.saveLocked()
 }
 
@@ -438,6 +463,9 @@ func (s *devicesStore) updateAlerts(alerts deviceAlertSettings) error {
 	}
 	if alerts.DeviceOverrides == nil {
 		alerts.DeviceOverrides = map[string]bool{}
+	}
+	if alerts.DeviceRules == nil {
+		alerts.DeviceRules = map[string]deviceAlertRule{}
 	}
 	alerts.LastEvaluatedAt = s.state.Alerts.LastEvaluatedAt
 	alerts.LastEvaluationSummary = s.state.Alerts.LastEvaluationSummary
@@ -834,16 +862,17 @@ func (s *devicesStore) evaluateDeviceAlerts() {
 			if cfg.DeviceOverrides[device.ID] || cfg.CheckOverrides[device.AccountID] {
 				continue
 			}
-			if cfg.OfflineEnabled && device.Status == deviceOffline {
+			rule := effectiveDeviceAlertRule(cfg, device.ID)
+			if rule.OfflineEnabled && device.Status == deviceOffline {
 				summary["offline"]++
 			}
-			if cfg.LatencyEnabled && device.LatencyMs != nil && *device.LatencyMs >= cfg.LatencyWarnMs {
+			if rule.LatencyEnabled && device.LatencyMs != nil && *device.LatencyMs >= rule.LatencyWarnMs {
 				summary["latency"]++
 			}
-			if cfg.PacketLossEnabled && device.PacketLoss != nil && *device.PacketLoss >= cfg.PacketLossWarnPct {
+			if rule.PacketLossEnabled && device.PacketLoss != nil && *device.PacketLoss >= rule.PacketLossWarnPct {
 				summary["packetLoss"]++
 			}
-			if cfg.UptimeEnabled && device.Status == deviceOnline && device.UptimeSeconds != nil && *device.UptimeSeconds <= cfg.UptimeMinSeconds {
+			if rule.UptimeEnabled && device.Status == deviceOnline && device.UptimeSeconds != nil && *device.UptimeSeconds >= 0 && *device.UptimeSeconds <= rule.UptimeMinSeconds {
 				summary["uptime"]++
 			}
 		}
@@ -851,6 +880,54 @@ func (s *devicesStore) evaluateDeviceAlerts() {
 	s.state.Alerts.LastEvaluatedAt = time.Now().UTC().Format(time.RFC3339)
 	s.state.Alerts.LastEvaluationSummary = summary
 	_ = s.saveLocked()
+}
+
+type effectiveDeviceAlerts struct {
+	OfflineEnabled    bool
+	UptimeEnabled     bool
+	UptimeMinSeconds  float64
+	LatencyEnabled    bool
+	LatencyWarnMs     float64
+	PacketLossEnabled bool
+	PacketLossWarnPct float64
+}
+
+func effectiveDeviceAlertRule(cfg deviceAlertSettings, deviceID string) effectiveDeviceAlerts {
+	out := effectiveDeviceAlerts{
+		OfflineEnabled:    cfg.OfflineEnabled,
+		UptimeEnabled:     cfg.UptimeEnabled,
+		UptimeMinSeconds:  cfg.UptimeMinSeconds,
+		LatencyEnabled:    cfg.LatencyEnabled,
+		LatencyWarnMs:     cfg.LatencyWarnMs,
+		PacketLossEnabled: cfg.PacketLossEnabled,
+		PacketLossWarnPct: cfg.PacketLossWarnPct,
+	}
+	rule, ok := cfg.DeviceRules[deviceID]
+	if !ok {
+		return out
+	}
+	if rule.OfflineEnabled != nil {
+		out.OfflineEnabled = *rule.OfflineEnabled
+	}
+	if rule.UptimeEnabled != nil {
+		out.UptimeEnabled = *rule.UptimeEnabled
+	}
+	if rule.UptimeMinSeconds != nil {
+		out.UptimeMinSeconds = *rule.UptimeMinSeconds
+	}
+	if rule.LatencyEnabled != nil {
+		out.LatencyEnabled = *rule.LatencyEnabled
+	}
+	if rule.LatencyWarnMs != nil {
+		out.LatencyWarnMs = *rule.LatencyWarnMs
+	}
+	if rule.PacketLossEnabled != nil {
+		out.PacketLossEnabled = *rule.PacketLossEnabled
+	}
+	if rule.PacketLossWarnPct != nil {
+		out.PacketLossWarnPct = *rule.PacketLossWarnPct
+	}
+	return out
 }
 
 func normalizeUniFiDevices(payload any, accountID string, siteFilter string) []managedDevice {

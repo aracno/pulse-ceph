@@ -20,7 +20,7 @@ import { showTooltip, hideTooltip } from '@/components/shared/Tooltip';
 import { AlertsAPI } from '@/api/alerts';
 import { NotificationsAPI, Webhook } from '@/api/notifications';
 import { LicenseAPI, type LicenseFeatureStatus } from '@/api/license';
-import { devicesMonitoringStore } from '@/stores/devicesMonitoring';
+import { devicesMonitoringStore, type DeviceAlertRule } from '@/stores/devicesMonitoring';
 import type { EmailConfig, AppriseConfig } from '@/api/notifications';
 import type { HysteresisThreshold } from '@/types/alerts';
 import type { Alert, Incident, IncidentEvent, State, VM, Container, DockerHost, DockerContainer, Host, Storage } from '@/types/api';
@@ -3196,6 +3196,54 @@ function DeviceCheckAlertsPanel() {
       packetLossWarnPct: normalized,
     });
   };
+  const effectiveDeviceRule = (id: string) => {
+    const rule = alerts().deviceRules?.[id] ?? {};
+    return {
+      offlineEnabled: rule.offlineEnabled ?? alerts().offlineEnabled,
+      uptimeEnabled: rule.uptimeEnabled ?? alerts().uptimeEnabled,
+      uptimeMinSeconds: rule.uptimeMinSeconds ?? alerts().uptimeMinSeconds,
+      latencyEnabled: rule.latencyEnabled ?? alerts().latencyEnabled,
+      latencyWarnMs: rule.latencyWarnMs ?? alerts().latencyWarnMs,
+      packetLossEnabled: rule.packetLossEnabled ?? alerts().packetLossEnabled,
+      packetLossWarnPct: rule.packetLossWarnPct ?? alerts().packetLossWarnPct,
+    };
+  };
+  const updateDeviceRule = (id: string, patch: DeviceAlertRule) => {
+    updateAlerts({
+      deviceRules: {
+        ...(alerts().deviceRules ?? {}),
+        [id]: {
+          ...((alerts().deviceRules ?? {})[id] ?? {}),
+          ...patch,
+        },
+      },
+    });
+  };
+  const setDeviceNumericThreshold = (
+    id: string,
+    key: 'uptime' | 'latency' | 'packetLoss',
+    value: number,
+  ) => {
+    const normalized = Number.isFinite(value) ? Math.max(0, value) : 0;
+    if (key === 'uptime') {
+      updateDeviceRule(id, {
+        uptimeEnabled: normalized > 0,
+        uptimeMinSeconds: normalized * 60,
+      });
+      return;
+    }
+    if (key === 'latency') {
+      updateDeviceRule(id, {
+        latencyEnabled: normalized > 0,
+        latencyWarnMs: normalized,
+      });
+      return;
+    }
+    updateDeviceRule(id, {
+      packetLossEnabled: normalized > 0,
+      packetLossWarnPct: normalized,
+    });
+  };
   const updateDeviceOverride = (id: string, disabled: boolean) => {
     updateAlerts({
       deviceOverrides: {
@@ -3331,6 +3379,7 @@ function DeviceCheckAlertsPanel() {
               <For each={devices()}>
                 {(device) => {
                   const enabled = () => !(alerts().deviceOverrides ?? {})[device.id];
+                  const rule = () => effectiveDeviceRule(device.id);
                   return (
                     <tr>
                       <td class="px-4 py-3">
@@ -3345,44 +3394,57 @@ function DeviceCheckAlertsPanel() {
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.accountType.toUpperCase()}</td>
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.status}</td>
                       <td class="px-4 py-3">
-                        <span class={`rounded px-2 py-0.5 text-xs font-semibold ${alerts().offlineEnabled
-                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
-                          : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
-                          }`}>
-                          {alerts().offlineEnabled ? 'Warn' : 'Off'}
-                        </span>
+                        <button
+                          type="button"
+                          onClick={() => updateDeviceRule(device.id, { offlineEnabled: !rule().offlineEnabled })}
+                          class={`rounded px-2 py-0.5 text-xs font-semibold ${rule().offlineEnabled
+                            ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+                            : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
+                            }`}
+                        >
+                          {rule().offlineEnabled ? 'Warn' : 'Off'}
+                        </button>
                       </td>
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300">{device.uptime || '-'}</td>
                       <td class="px-4 py-3">
-                        <span class={`rounded px-2 py-0.5 text-xs font-semibold ${alerts().uptimeEnabled
-                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
-                          : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
-                          }`}>
-                          {alerts().uptimeEnabled ? `${Math.round((alerts().uptimeMinSeconds ?? 0) / 60)}m` : 'Off'}
-                        </span>
+                        <div class="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min="0"
+                            value={rule().uptimeEnabled ? Math.round((rule().uptimeMinSeconds ?? 0) / 60) : 0}
+                            onInput={(event) => setDeviceNumericThreshold(device.id, 'uptime', Number(event.currentTarget.value))}
+                            class="h-8 w-20 rounded border border-gray-300 bg-white px-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                          />
+                          <span class="text-xs text-gray-500 dark:text-gray-400">min</span>
+                        </div>
                       </td>
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300">
                         {device.latencyMs !== undefined ? `${device.latencyMs}` : '-'}
                       </td>
                       <td class="px-4 py-3">
-                        <span class={`rounded px-2 py-0.5 text-xs font-semibold ${alerts().latencyEnabled
-                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
-                          : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
-                          }`}>
-                          {alerts().latencyEnabled ? `${alerts().latencyWarnMs} ms` : 'Off'}
-                        </span>
+                        <div class="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min="0"
+                            value={rule().latencyEnabled ? rule().latencyWarnMs : 0}
+                            onInput={(event) => setDeviceNumericThreshold(device.id, 'latency', Number(event.currentTarget.value))}
+                            class="h-8 w-20 rounded border border-gray-300 bg-white px-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                          />
+                          <span class="text-xs text-gray-500 dark:text-gray-400">ms</span>
+                        </div>
                       </td>
                       <td class="px-4 py-3">
                         <div class="flex items-center justify-between gap-2">
                           <span class="text-gray-700 dark:text-gray-300">
                             {device.packetLoss !== undefined ? `${device.packetLoss}%` : '-'}
                           </span>
-                          <span class={`rounded px-2 py-0.5 text-xs font-semibold ${alerts().packetLossEnabled
-                            ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
-                            : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
-                            }`}>
-                            {alerts().packetLossEnabled ? `${alerts().packetLossWarnPct}%` : 'Off'}
-                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            value={rule().packetLossEnabled ? rule().packetLossWarnPct : 0}
+                            onInput={(event) => setDeviceNumericThreshold(device.id, 'packetLoss', Number(event.currentTarget.value))}
+                            class="h-8 w-20 rounded border border-gray-300 bg-white px-2 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                          />
                         </div>
                       </td>
                     </tr>

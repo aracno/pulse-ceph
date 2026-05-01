@@ -95,10 +95,16 @@ Configurable alert controls:
 - Packet loss warning threshold.
 - Per-check alert enable/disable.
 - Per-device alert enable/disable.
+- Per-device alert thresholds for offline, uptime, latency, and packet loss.
 
 For the numeric thresholds, `0` disables that metric family. For example, setting
 latency to `0` disables latency alerts while keeping offline and packet loss alerts
 available.
+
+Uptime alerts are evaluated as a low-uptime window: when enabled, an online device
+alerts if its collected uptime is between `0` and the configured threshold. This
+is meant to catch recent reboots without treating long-running devices as a
+problem.
 
 The backend evaluates these settings after each poll and persists the latest summary. This keeps the behavior aligned with the existing Pulse alerting model: broad family switches first, then targeted overrides.
 

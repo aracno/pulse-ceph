@@ -62,8 +62,19 @@ export interface DeviceAlertSettings {
   uptimeMinSeconds: number;
   checkOverrides?: Record<string, boolean>;
   deviceOverrides?: Record<string, boolean>;
+  deviceRules?: Record<string, DeviceAlertRule>;
   lastEvaluatedAt?: string;
   lastEvaluationSummary?: Record<string, number>;
+}
+
+export interface DeviceAlertRule {
+  offlineEnabled?: boolean;
+  uptimeEnabled?: boolean;
+  uptimeMinSeconds?: number;
+  latencyEnabled?: boolean;
+  latencyWarnMs?: number;
+  packetLossEnabled?: boolean;
+  packetLossWarnPct?: number;
 }
 
 const ACCOUNTS_KEY = 'pulse.devices.accounts.v1';
@@ -94,6 +105,7 @@ const defaultAlerts = (): DeviceAlertSettings => ({
   uptimeMinSeconds: 300,
   checkOverrides: {},
   deviceOverrides: {},
+  deviceRules: {},
 });
 
 const [accounts, setAccounts] = createSignal<DeviceAccount[]>([defaultPingAccount()]);
