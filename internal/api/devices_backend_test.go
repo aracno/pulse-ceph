@@ -124,6 +124,86 @@ func TestNormalizeUniFiDevicesHandlesUIDBAndReportedState(t *testing.T) {
 	}
 }
 
+func TestNormalizeUniFiDevicesEnrichesHostMetadataAndISPMetrics(t *testing.T) {
+	devicesPayload := map[string]any{
+		"data": []any{
+			map[string]any{
+				"hostId":   "host-pyxi",
+				"hostName": "PYXI-UDMPRO",
+				"devices": []any{
+					map[string]any{
+						"id":          "70A74168C9EE",
+						"mac":         "70A74168C9EE",
+						"name":        "PYXI-UDMPRO",
+						"model":       "UDM SE",
+						"ip":          "10.0.0.103",
+						"productLine": "network",
+						"status":      "online",
+						"isConsole":   true,
+					},
+					map[string]any{
+						"id":          "switch-1",
+						"name":        "PYXI-SW",
+						"model":       "USW Pro 24 PoE",
+						"ip":          "192.168.1.84",
+						"productLine": "network",
+						"status":      "online",
+					},
+				},
+			},
+		},
+	}
+	metricsPayload := map[string]any{
+		"data": []any{
+			map[string]any{
+				"hostId": "host-pyxi",
+				"siteId": "site-home",
+				"periods": []any{
+					map[string]any{
+						"metricTime": "2026-05-01T05:35:00Z",
+						"data": map[string]any{
+							"wan": map[string]any{
+								"avgLatency":    float64(55),
+								"packetLoss":    float64(1),
+								"download_kbps": float64(30000),
+								"upload_kbps":   float64(10000),
+								"uptime":        float64(100),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	devices := normalizeUniFiDevices(devicesPayload, "check-unifi", "")
+	applyUniFiISPMetrics(devices, normalizeUniFiISPMetrics(metricsPayload))
+
+	byName := map[string]managedDevice{}
+	for _, device := range devices {
+		byName[device.Name] = device
+	}
+	gateway := byName["PYXI-UDMPRO"]
+	if gateway.Type != "gateway" {
+		t.Fatalf("expected UDM model to map to gateway, got %q", gateway.Type)
+	}
+	if gateway.LatencyMs == nil || *gateway.LatencyMs != 55 {
+		t.Fatalf("expected ISP latency metric, got %#v", gateway.LatencyMs)
+	}
+	if gateway.PacketLoss == nil || *gateway.PacketLoss != 1 {
+		t.Fatalf("expected ISP packet loss metric, got %#v", gateway.PacketLoss)
+	}
+	if gateway.WANRxBps == nil || *gateway.WANRxBps != 30000000 {
+		t.Fatalf("expected download_kbps to convert to bps, got %#v", gateway.WANRxBps)
+	}
+	if gateway.WANTxBps == nil || *gateway.WANTxBps != 10000000 {
+		t.Fatalf("expected upload_kbps to convert to bps, got %#v", gateway.WANTxBps)
+	}
+	if byName["PYXI-SW"].WANRxBps != nil {
+		t.Fatalf("expected switch not to inherit WAN metrics, got %#v", byName["PYXI-SW"].WANRxBps)
+	}
+}
+
 func TestNormalizeUniFiDevicesSiteFilter(t *testing.T) {
 	payload := map[string]any{
 		"data": []any{

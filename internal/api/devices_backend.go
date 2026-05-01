@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,6 +113,17 @@ type devicesStore struct {
 	path   string
 	state  devicesState
 	client *http.Client
+}
+
+type uniFiISPMetric struct {
+	HostID      string
+	SiteID      string
+	MetricTime  string
+	LatencyMs   *float64
+	PacketLoss  *float64
+	DownloadBps *float64
+	UploadBps   *float64
+	WANUptime   *float64
 }
 
 func newDevicesStore(dataPath string) *devicesStore {
@@ -542,7 +554,46 @@ func (s *devicesStore) discoverUniFi(check deviceCheck) ([]managedDevice, error)
 	for i := range devices {
 		devices[i].LatencyMs = &apiLatency
 	}
+	if metrics, err := s.fetchUniFiISPMetrics(check); err == nil {
+		applyUniFiISPMetrics(devices, metrics)
+	} else {
+		log.Debug().Err(err).Msg("Unable to fetch UniFi ISP metrics")
+	}
 	return devices, nil
+}
+
+func (s *devicesStore) fetchUniFiISPMetrics(check deviceCheck) (map[string]uniFiISPMetric, error) {
+	payload := unifiProxyRequest{BaseURL: check.Host, Endpoint: "/ea/isp-metrics/5m", APIKey: check.APIKey}
+	target, err := buildUniFiProxyURL(payload)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return nil, err
+	}
+	query := parsed.Query()
+	query.Set("duration", "24h")
+	parsed.RawQuery = query.Encode()
+	req, err := http.NewRequest(http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-API-Key", check.APIKey)
+	response, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("UniFi ISP metrics returned %s", response.Status)
+	}
+	var body any
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return normalizeUniFiISPMetrics(body), nil
 }
 
 func pollPingDevice(device managedDevice, check deviceCheck) (managedDevice, error) {
@@ -931,6 +982,136 @@ func normalizeUniFiDevices(payload any, accountID string, siteFilter string) []m
 	return out
 }
 
+func normalizeUniFiISPMetrics(payload any) map[string]uniFiISPMetric {
+	metrics := map[string]uniFiISPMetric{}
+	for _, item := range extractUniFiMetricRecords(payload) {
+		record, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		hostID := stringValue(record, "hostId")
+		if hostID == "" {
+			continue
+		}
+		period := latestUniFiMetricPeriod(record["periods"])
+		if period == nil {
+			continue
+		}
+		data := mapValue(period, "data")
+		wan := mapValue(data, "wan")
+		downloadKbps, hasDownload := numberValue(wan, "download_kbps")
+		uploadKbps, hasUpload := numberValue(wan, "upload_kbps")
+		metric := uniFiISPMetric{
+			HostID:     hostID,
+			SiteID:     stringValue(record, "siteId"),
+			MetricTime: stringValue(period, "metricTime"),
+			LatencyMs:  numberFromPaths(wan, [][]string{{"avgLatency"}, {"latency"}, {"averageLatency"}}),
+			PacketLoss: numberFromPaths(wan, [][]string{{"packetLoss"}, {"packet_loss"}}),
+			WANUptime:  numberFromPaths(wan, [][]string{{"uptime"}, {"wanUptime"}}),
+		}
+		if hasDownload {
+			metric.DownloadBps = roundedFloatPtr(downloadKbps*1000, 1)
+		}
+		if hasUpload {
+			metric.UploadBps = roundedFloatPtr(uploadKbps*1000, 1)
+		}
+		metrics[hostID] = metric
+	}
+	return metrics
+}
+
+func extractUniFiMetricRecords(payload any) []any {
+	var records []any
+	var walk func(any)
+	walk = func(value any) {
+		switch typed := value.(type) {
+		case []any:
+			for _, item := range typed {
+				walk(item)
+			}
+		case map[string]any:
+			if data, ok := typed["data"]; ok {
+				walk(data)
+			}
+			if stringValue(typed, "hostId") != "" {
+				if _, ok := typed["periods"]; ok {
+					records = append(records, typed)
+				}
+			}
+		}
+	}
+	walk(payload)
+	return records
+}
+
+func latestUniFiMetricPeriod(value any) map[string]any {
+	periods, ok := value.([]any)
+	if !ok || len(periods) == 0 {
+		return nil
+	}
+	for i := len(periods) - 1; i >= 0; i-- {
+		if period, ok := periods[i].(map[string]any); ok {
+			return period
+		}
+	}
+	return nil
+}
+
+func applyUniFiISPMetrics(devices []managedDevice, metrics map[string]uniFiISPMetric) {
+	for i := range devices {
+		hostID := ""
+		if devices[i].Raw != nil {
+			hostID = stringValue(devices[i].Raw, "_pulseHostId")
+		}
+		if hostID == "" {
+			continue
+		}
+		if !isUniFiGatewayMetricTarget(devices[i]) {
+			continue
+		}
+		metric, ok := metrics[hostID]
+		if !ok {
+			continue
+		}
+		if metric.LatencyMs != nil {
+			devices[i].LatencyMs = metric.LatencyMs
+		}
+		if metric.PacketLoss != nil {
+			devices[i].PacketLoss = metric.PacketLoss
+		}
+		if metric.DownloadBps != nil {
+			devices[i].WANRxBps = metric.DownloadBps
+		}
+		if metric.UploadBps != nil {
+			devices[i].WANTxBps = metric.UploadBps
+		}
+		raw := devices[i].Raw
+		if raw == nil {
+			raw = map[string]any{}
+		}
+		raw["_pulseIspMetrics"] = map[string]any{
+			"siteId":      metric.SiteID,
+			"metricTime":  metric.MetricTime,
+			"wanUptime":   metric.WANUptime,
+			"downloadBps": metric.DownloadBps,
+			"uploadBps":   metric.UploadBps,
+		}
+		devices[i].Raw = raw
+	}
+}
+
+func isUniFiGatewayMetricTarget(device managedDevice) bool {
+	if device.Raw != nil && strings.EqualFold(stringValue(device.Raw, "isConsole"), "true") {
+		return true
+	}
+	switch strings.ToLower(device.Type) {
+	case "gateway", "router", "modem", "controller":
+		return true
+	default:
+		return false
+	}
+}
+
 func extractUniFiRecords(payload any) []any {
 	var records []any
 	var walk func(any)
@@ -944,9 +1125,15 @@ func extractUniFiRecords(payload any) []any {
 			if data, ok := typed["data"]; ok {
 				walk(data)
 			}
-			for _, key := range []string{"devices", "uidb"} {
-				if nested, ok := typed[key]; ok {
-					walk(nested)
+			if enriched := enrichedUniFiHostDevices(typed); len(enriched) > 0 {
+				for _, record := range enriched {
+					records = append(records, record)
+				}
+			} else {
+				for _, key := range []string{"devices", "uidb"} {
+					if nested, ok := typed[key]; ok {
+						walk(nested)
+					}
 				}
 			}
 			if looksLikeUniFiDevice(typed) {
@@ -961,6 +1148,30 @@ func extractUniFiRecords(payload any) []any {
 	}
 	walk(payload)
 	return records
+}
+
+func enrichedUniFiHostDevices(record map[string]any) []any {
+	hostID := stringValue(record, "hostId")
+	devices, ok := record["devices"].([]any)
+	if !ok || hostID == "" {
+		return nil
+	}
+	out := make([]any, 0, len(devices))
+	for _, item := range devices {
+		device, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		clone := map[string]any{}
+		for key, value := range device {
+			clone[key] = value
+		}
+		clone["_pulseHostId"] = hostID
+		clone["_pulseHostName"] = stringValue(record, "hostName")
+		clone["_pulseHostUpdatedAt"] = stringValue(record, "updatedAt")
+		out = append(out, clone)
+	}
+	return out
 }
 
 func looksLikeUniFiDevice(record map[string]any) bool {
@@ -1012,9 +1223,9 @@ func normalizeUniFiRecord(record map[string]any, accountID string, index int) ma
 		stringValue(record, "type"),
 		stringValue(record, "category"),
 		stringValue(record, "deviceType"),
-		stringValue(record, "productLine"),
-		stringValue(record, "networkDeviceType"),
 		model,
+		stringValue(record, "networkDeviceType"),
+		stringValue(record, "productLine"),
 	)
 	status := normalizeUniFiStatus(firstNonEmpty(
 		stringValue(record, "status"),
