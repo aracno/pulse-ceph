@@ -1,4 +1,4 @@
-import { Component, For, JSX, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { Component, For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
 import {
   devicesMonitoringStore,
@@ -6,16 +6,13 @@ import {
   type DeviceInventoryItem,
 } from '@/stores/devicesMonitoring';
 import { DevicesAPI } from '@/api/devices';
-import Activity from 'lucide-solid/icons/activity';
-import AlertTriangle from 'lucide-solid/icons/alert-triangle';
-import CheckCircle2 from 'lucide-solid/icons/check-circle-2';
-import Globe2 from 'lucide-solid/icons/globe-2';
+import { Card } from '@/components/shared/Card';
+import { ScrollableTable } from '@/components/shared/ScrollableTable';
 import Network from 'lucide-solid/icons/network';
 import Plus from 'lucide-solid/icons/plus';
 import Router from 'lucide-solid/icons/router';
 import ServerCog from 'lucide-solid/icons/server-cog';
 import Settings from 'lucide-solid/icons/settings';
-import ShieldCheck from 'lucide-solid/icons/shield-check';
 import Trash2 from 'lucide-solid/icons/trash-2';
 import Wifi from 'lucide-solid/icons/wifi';
 import X from 'lucide-solid/icons/x';
@@ -25,6 +22,13 @@ const statusClasses: Record<string, string> = {
   warning: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
   offline: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
   unknown: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
+};
+
+const statusDotClasses: Record<string, string> = {
+  online: 'bg-green-500',
+  warning: 'bg-amber-500',
+  offline: 'bg-red-500',
+  unknown: 'bg-gray-500',
 };
 
 const sourceClasses: Record<DeviceAccountType, string> = {
@@ -64,8 +68,17 @@ const formatLastSeen = (value?: string) => {
   return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 };
 
+type DeviceSortKey = 'name' | 'type' | 'status' | 'latency' | 'source';
+
+const thClass =
+  'px-3 py-2 text-xs font-semibold uppercase tracking-normal text-gray-500 dark:text-gray-400 cursor-pointer select-none';
+
 export const Devices: Component = () => {
   const navigate = useNavigate();
+  const [search, setSearch] = createSignal('');
+  const [statusFilter, setStatusFilter] = createSignal<'all' | 'online' | 'warning' | 'offline'>('all');
+  const [sortKey, setSortKey] = createSignal<DeviceSortKey>('name');
+  const [sortDirection, setSortDirection] = createSignal<'asc' | 'desc'>('asc');
   const [wizardOpen, setWizardOpen] = createSignal(false);
   const [wizardStep, setWizardStep] = createSignal<1 | 2>(1);
   const [selectedAccountId, setSelectedAccountId] = createSignal('account-ping-default');
@@ -86,10 +99,6 @@ export const Devices: Component = () => {
   const selectedAccount = createMemo(() =>
     devicesMonitoringStore.accounts().find((account) => account.id === selectedAccountId()),
   );
-  const onlineCount = createMemo(() => devices().filter((device) => device.status === 'online').length);
-  const warningCount = createMemo(() => devices().filter((device) => device.status === 'warning').length);
-  const offlineCount = createMemo(() => devices().filter((device) => device.status === 'offline').length);
-  const managedCount = createMemo(() => devices().length);
   const filteredUnifiDevices = createMemo(() => {
     const search = unifiSearch().trim().toLowerCase();
     if (!search) return unifiDevices();
@@ -100,13 +109,47 @@ export const Devices: Component = () => {
     );
   });
 
-  const sourceSummary = createMemo(() => {
-    const sources = devices().reduce<Record<string, number>>((acc, device) => {
-      acc[device.accountType] = (acc[device.accountType] || 0) + 1;
-      return acc;
-    }, {});
-    return Object.entries(sources).map(([source, count]) => ({ source, count }));
+  const filteredDevices = createMemo(() => {
+    const term = search().trim().toLowerCase();
+    const filtered = devices().filter((device) => {
+      const statusMatch = statusFilter() === 'all' || device.status === statusFilter();
+      if (!statusMatch) return false;
+      if (!term) return true;
+      return [device.name, device.host, device.vendor, device.model, device.site, device.accountType, device.type]
+        .filter(Boolean)
+        .some((value) => value?.toLowerCase().includes(term));
+    });
+
+    const direction = sortDirection() === 'asc' ? 1 : -1;
+    return [...filtered].sort((a, b) => {
+      const key = sortKey();
+      if (key === 'latency') {
+        return ((a.latencyMs ?? Number.MAX_SAFE_INTEGER) - (b.latencyMs ?? Number.MAX_SAFE_INTEGER)) * direction;
+      }
+      const left =
+        key === 'name' ? a.name :
+          key === 'type' ? a.type :
+            key === 'status' ? a.status :
+              a.accountType;
+      const right =
+        key === 'name' ? b.name :
+          key === 'type' ? b.type :
+            key === 'status' ? b.status :
+              b.accountType;
+      return left.localeCompare(right) * direction;
+    });
   });
+
+  const handleSort = (key: DeviceSortKey) => {
+    if (sortKey() === key) {
+      setSortDirection(sortDirection() === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortKey(key);
+      setSortDirection('asc');
+    }
+  };
+
+  const sortIndicator = (key: DeviceSortKey) => sortKey() === key ? (sortDirection() === 'asc' ? '▲' : '▼') : '';
 
   const resetWizard = () => {
     setWizardStep(1);
@@ -194,24 +237,50 @@ export const Devices: Component = () => {
   });
 
   return (
-    <div class="space-y-6">
-      <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div class="flex items-center gap-3">
-          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-            <Network class="h-5 w-5" strokeWidth={2} />
+    <div class="space-y-3">
+      <Card padding="sm" class="mb-3">
+        <div class="flex flex-col gap-3">
+          <div class="relative">
+            <input
+              type="text"
+              placeholder="Search devices by name, address, vendor, model, site, or source..."
+              value={search()}
+              onInput={(event) => setSearch(event.currentTarget.value)}
+              class="w-full rounded-lg border border-gray-300 bg-white py-1.5 pl-9 pr-10 text-sm text-gray-800 outline-none transition-all placeholder:text-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200 dark:placeholder:text-gray-500 dark:focus:border-blue-400"
+            />
+            <svg
+              class="absolute left-3 top-2 h-4 w-4 text-gray-400 dark:text-gray-500"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <Show when={search()}>
+              <button
+                type="button"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 transition-colors hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
+                onClick={() => setSearch('')}
+                aria-label="Clear search"
+                title="Clear search"
+              >
+                <X class="h-4 w-4" strokeWidth={2} />
+              </button>
+            </Show>
           </div>
-          <div>
-            <h1 class="text-2xl font-semibold tracking-normal text-gray-900 dark:text-gray-100">Devices</h1>
-            <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
-              Network hardware health for switches, routers, modems, gateways, and UniFi equipment.
-            </p>
-          </div>
-        </div>
-        <div class="flex flex-wrap gap-2">
+
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex flex-wrap items-center gap-1">
+              <FilterButton label="All" active={statusFilter() === 'all'} onClick={() => setStatusFilter('all')} />
+              <FilterButton label="Online" active={statusFilter() === 'online'} onClick={() => setStatusFilter('online')} />
+              <FilterButton label="Degraded" active={statusFilter() === 'warning'} onClick={() => setStatusFilter('warning')} />
+              <FilterButton label="Offline" active={statusFilter() === 'offline'} onClick={() => setStatusFilter('offline')} />
+            </div>
+            <div class="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={openWizard}
-            class="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-blue-600 px-3 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+                class="inline-flex h-8 items-center justify-center gap-2 rounded-md bg-blue-600 px-3 text-xs font-medium text-white transition-colors hover:bg-blue-700"
           >
             <Plus class="h-4 w-4" strokeWidth={2} />
             Add device
@@ -219,125 +288,51 @@ export const Devices: Component = () => {
           <button
             type="button"
             onClick={() => navigate('/settings/devices')}
-            class="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                class="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
           >
             <Settings class="h-4 w-4" strokeWidth={2} />
             Checks
           </button>
-        </div>
-      </div>
-
-      <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard label="Managed" value={managedCount()} detail="Devices in inventory" icon={ShieldCheck} tone="blue" />
-        <SummaryCard label="Online" value={onlineCount()} detail="Last check succeeded" icon={CheckCircle2} tone="green" />
-        <SummaryCard label="Warnings" value={warningCount()} detail="Metrics or state need attention" icon={AlertTriangle} tone="amber" />
-        <SummaryCard label="Offline" value={offlineCount()} detail="Unreachable or missing heartbeat" icon={Activity} tone="red" />
-      </div>
-
-      <div class="grid gap-4 xl:grid-cols-[1fr_360px]">
-        <div class="overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-          <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-            <div class="flex items-center justify-between gap-3">
-              <div>
-                <h2 class="text-sm font-semibold uppercase tracking-normal text-gray-500 dark:text-gray-400">Inventory</h2>
-                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Devices added through the wizard. State updates follow each check frequency.
-                </p>
-              </div>
-              <div class="text-xs text-gray-500 dark:text-gray-400">{devices().length} devices</div>
             </div>
           </div>
-
-          <Show when={devices().length > 0} fallback={<EmptyInventory onAdd={openWizard} />}>
-            <div class="divide-y divide-gray-200 dark:divide-gray-700">
-              <For each={devices()}>
-                {(device) => {
-                  const Icon = typeIcon(device.type);
-                  return (
-                    <div class="grid gap-4 p-4 lg:grid-cols-[1fr_260px_160px] lg:items-center">
-                      <div class="flex min-w-0 items-start gap-3">
-                        <div class="flex h-10 w-10 items-center justify-center rounded-md bg-gray-100 text-gray-600 dark:bg-gray-900 dark:text-gray-300">
-                          <Icon class="h-5 w-5" strokeWidth={2} />
-                        </div>
-                        <div class="min-w-0">
-                          <div class="flex flex-wrap items-center gap-2">
-                            <span class="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">
-                              {device.name}
-                            </span>
-                            <span class={`rounded px-2 py-0.5 text-xs font-medium ${statusClasses[device.status]}`}>
-                              {device.status}
-                            </span>
-                            <span class={`rounded px-2 py-0.5 text-xs font-medium ${sourceClasses[device.accountType]}`}>
-                              {device.accountType.toUpperCase()}
-                            </span>
-                          </div>
-                          <div class="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">
-                            {[device.vendor, device.model, device.host, device.site].filter(Boolean).join(' - ')}
-                          </div>
-                          <Show when={device.notes}>
-                            <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{device.notes}</div>
-                          </Show>
-                        </div>
-                      </div>
-
-                      <div class="grid grid-cols-2 gap-2 text-xs">
-                        <Metric label="Latency" value={latencyText(device)} />
-                        <Metric label="Loss" value={typeof device.packetLoss === 'number' ? `${device.packetLoss}%` : '-'} />
-                        <Metric label="CPU" value={percentText(device.cpuUsage)} />
-                        <Metric label="Memory" value={percentText(device.memoryUsage)} />
-                      </div>
-
-                      <div class="flex items-center justify-between gap-2 lg:justify-end">
-                        <div class="text-xs text-gray-500 dark:text-gray-400">Seen {formatLastSeen(device.lastSeen)}</div>
-                        <button
-                          type="button"
-                          onClick={() => devicesMonitoringStore.pollDueDevices(true)}
-                          class="rounded px-2 py-1 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-900/20"
-                        >
-                          Check
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void devicesMonitoringStore.removeDevice(device.id)}
-                          class="rounded p-1.5 text-red-600 transition-colors hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-900/20"
-                          title="Remove device"
-                        >
-                          <Trash2 class="h-4 w-4" strokeWidth={2} />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                }}
-              </For>
-            </div>
-          </Show>
         </div>
+      </Card>
 
-        <div class="space-y-4">
-          <SidePanel title="Collection Sources">
-            <SourceLine icon={Activity} label="Ping" detail="Reachability, latency, packet loss." />
-            <SourceLine icon={Globe2} label="UniFi" detail="Sites, device identity, firmware, utilization." />
-            <SourceLine icon={Network} label="SNMP" detail="Uptime, interfaces, CPU, memory, sensors." />
-          </SidePanel>
-          <SidePanel title="Source Breakdown">
-            <Show
-              when={sourceSummary().length > 0}
-              fallback={<p class="text-sm text-gray-500 dark:text-gray-400">No devices reporting yet.</p>}
-            >
-              <div class="space-y-2">
-                <For each={sourceSummary()}>
-                  {(item) => (
-                    <div class="flex items-center justify-between rounded-md bg-gray-50 px-3 py-2 text-sm dark:bg-gray-900/50">
-                      <span class="font-medium text-gray-700 dark:text-gray-300">{item.source.toUpperCase()}</span>
-                      <span class="text-gray-500 dark:text-gray-400">{item.count}</span>
-                    </div>
+      <Show when={filteredDevices().length > 0} fallback={<Card padding="lg"><EmptyInventory onAdd={openWizard} /></Card>}>
+        <Card padding="none" tone="glass" class="overflow-hidden">
+          <ScrollableTable persistKey="devices-overview" minWidth="1000px" mobileMinWidth="1000px">
+            <table class="w-full border-collapse whitespace-nowrap" style={{ 'table-layout': 'fixed', 'min-width': '1000px' }}>
+              <thead>
+                <tr class="border-b border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-700 dark:bg-gray-700/50 dark:text-gray-300">
+                  <th class={`${thClass} text-left pl-4`} style={{ width: '230px' }} onClick={() => handleSort('name')}>
+                    Device {sortIndicator('name')}
+                  </th>
+                  <th class={thClass} style={{ width: '120px' }} onClick={() => handleSort('type')}>Type {sortIndicator('type')}</th>
+                  <th class={thClass} style={{ width: '120px' }} onClick={() => handleSort('source')}>Source {sortIndicator('source')}</th>
+                  <th class={thClass} style={{ width: '120px' }} onClick={() => handleSort('status')}>Status {sortIndicator('status')}</th>
+                  <th class={thClass} style={{ width: '170px' }}>Address</th>
+                  <th class={thClass} style={{ width: '160px' }}>Model</th>
+                  <th class={thClass} style={{ width: '120px' }}>Site</th>
+                  <th class={thClass} style={{ width: '110px' }} onClick={() => handleSort('latency')}>Latency {sortIndicator('latency')}</th>
+                  <th class={thClass} style={{ width: '100px' }}>Loss</th>
+                  <th class={thClass} style={{ width: '90px' }}>CPU</th>
+                  <th class={thClass} style={{ width: '110px' }}>Memory</th>
+                  <th class={thClass} style={{ width: '120px' }}>Last seen</th>
+                  <th class={thClass} style={{ width: '100px' }}></th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                <For each={filteredDevices()}>
+                  {(device) => (
+                    <DeviceRow device={device} />
                   )}
                 </For>
-              </div>
-            </Show>
-          </SidePanel>
-        </div>
-      </div>
+              </tbody>
+            </table>
+          </ScrollableTable>
+        </Card>
+      </Show>
+
 
       <Show when={wizardOpen()}>
         <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -535,38 +530,79 @@ export const Devices: Component = () => {
   );
 };
 
-const SummaryCard: Component<{
-  label: string;
-  value: number;
-  detail: string;
-  icon: Component<{ class?: string; strokeWidth?: number }>;
-  tone: 'blue' | 'green' | 'amber' | 'red';
-}> = (props) => {
-  const Icon = props.icon;
-  const tones = {
-    blue: 'text-blue-500',
-    green: 'text-green-500',
-    amber: 'text-amber-500',
-    red: 'text-red-500',
-  };
+const FilterButton: Component<{ label: string; active: boolean; onClick: () => void }> = (props) => (
+  <button
+    type="button"
+    onClick={props.onClick}
+    class={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${props.active
+      ? 'bg-gray-700 text-white dark:bg-gray-700 dark:text-gray-100'
+      : 'text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200'
+      }`}
+  >
+    {props.label}
+  </button>
+);
+
+const DeviceRow: Component<{ device: DeviceInventoryItem }> = (props) => {
+  const Icon = typeIcon(props.device.type);
   return (
-    <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-      <div class="flex items-center justify-between">
-        <span class="text-sm font-medium text-gray-500 dark:text-gray-400">{props.label}</span>
-        <Icon class={`h-4 w-4 ${tones[props.tone]}`} strokeWidth={2} />
-      </div>
-      <div class="mt-3 text-2xl font-semibold text-gray-900 dark:text-gray-100">{props.value}</div>
-      <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{props.detail}</div>
-    </div>
+    <tr class="group hover:bg-gray-50 dark:hover:bg-gray-700/30">
+      <td class="px-3 py-2 pl-4">
+        <div class="flex min-w-0 items-center gap-2">
+          <span class="text-gray-400 dark:text-gray-500">›</span>
+          <span class={`h-2 w-2 rounded-full ${statusDotClasses[props.device.status] || statusDotClasses.unknown}`} />
+          <Icon class="h-4 w-4 flex-shrink-0 text-gray-400 dark:text-gray-500" strokeWidth={2} />
+          <div class="min-w-0">
+            <div class="truncate text-sm font-semibold text-gray-900 dark:text-gray-100">{props.device.name}</div>
+            <div class="truncate text-[11px] text-gray-500 dark:text-gray-400">
+              {props.device.vendor || 'Unknown vendor'}
+            </div>
+          </div>
+        </div>
+      </td>
+      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{props.device.type.replace('_', ' ')}</td>
+      <td class="px-3 py-2">
+        <span class={`rounded px-2 py-0.5 text-xs font-medium ${sourceClasses[props.device.accountType]}`}>
+          {props.device.accountType.toUpperCase()}
+        </span>
+      </td>
+      <td class="px-3 py-2">
+        <span class={`rounded px-2 py-0.5 text-xs font-medium ${statusClasses[props.device.status]}`}>
+          {props.device.status}
+        </span>
+      </td>
+      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{props.device.host || '-'}</td>
+      <td class="truncate px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{props.device.model || '-'}</td>
+      <td class="truncate px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{props.device.site || '-'}</td>
+      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{latencyText(props.device)}</td>
+      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">
+        {typeof props.device.packetLoss === 'number' ? `${props.device.packetLoss}%` : '-'}
+      </td>
+      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{percentText(props.device.cpuUsage)}</td>
+      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{percentText(props.device.memoryUsage)}</td>
+      <td class="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{formatLastSeen(props.device.lastSeen)}</td>
+      <td class="px-3 py-2">
+        <div class="flex items-center justify-end gap-1 opacity-80 group-hover:opacity-100">
+          <button
+            type="button"
+            onClick={() => devicesMonitoringStore.pollDueDevices(true)}
+            class="rounded px-2 py-1 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-900/20"
+          >
+            Check
+          </button>
+          <button
+            type="button"
+            onClick={() => void devicesMonitoringStore.removeDevice(props.device.id)}
+            class="rounded p-1.5 text-red-600 transition-colors hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-900/20"
+            title="Remove device"
+          >
+            <Trash2 class="h-4 w-4" strokeWidth={2} />
+          </button>
+        </div>
+      </td>
+    </tr>
   );
 };
-
-const Metric: Component<{ label: string; value: string }> = (props) => (
-  <div class="rounded-md bg-gray-50 px-3 py-2 dark:bg-gray-900/50">
-    <div class="text-[11px] uppercase tracking-normal text-gray-500 dark:text-gray-400">{props.label}</div>
-    <div class="mt-1 font-medium text-gray-900 dark:text-gray-100">{props.value}</div>
-  </div>
-);
 
 const EmptyInventory: Component<{ onAdd: () => void }> = (props) => (
   <div class="px-6 py-12 text-center">
@@ -587,27 +623,3 @@ const EmptyInventory: Component<{ onAdd: () => void }> = (props) => (
     </button>
   </div>
 );
-
-const SidePanel: Component<{ title: string; children: JSX.Element }> = (props) => (
-  <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-    <h2 class="mb-4 text-sm font-semibold uppercase tracking-normal text-gray-500 dark:text-gray-400">{props.title}</h2>
-    {props.children}
-  </div>
-);
-
-const SourceLine: Component<{
-  icon: Component<{ class?: string; strokeWidth?: number }>;
-  label: string;
-  detail: string;
-}> = (props) => {
-  const Icon = props.icon;
-  return (
-    <div class="mb-3 rounded-md border border-gray-200 p-3 last:mb-0 dark:border-gray-700">
-      <div class="flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-gray-100">
-        <Icon class="h-4 w-4 text-blue-500" strokeWidth={2} />
-        {props.label}
-      </div>
-      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{props.detail}</p>
-    </div>
-  );
-};
