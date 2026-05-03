@@ -138,6 +138,25 @@ func TestComputeDiagnostics_Basic(t *testing.T) {
 	router := &Router{config: cfg, monitor: monitor}
 	diag := router.computeDiagnostics(context.Background())
 
+	if diag.Nodes == nil {
+		t.Fatalf("expected diagnostics nodes to use an empty array, not nil")
+	}
+	if diag.PBS == nil {
+		t.Fatalf("expected diagnostics pbs to use an empty array, not nil")
+	}
+	if diag.Errors == nil {
+		t.Fatalf("expected diagnostics errors to use an empty array, not nil")
+	}
+	encoded, err := json.Marshal(diag)
+	if err != nil {
+		t.Fatalf("marshal diagnostics: %v", err)
+	}
+	payload := string(encoded)
+	for _, needle := range []string{`"nodes":[]`, `"pbs":[]`, `"errors":[]`} {
+		if !strings.Contains(payload, needle) {
+			t.Fatalf("diagnostics JSON missing %s in %s", needle, payload)
+		}
+	}
 	if diag.System.OS == "" {
 		t.Fatalf("expected system OS to be populated")
 	}

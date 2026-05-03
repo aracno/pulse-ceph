@@ -447,6 +447,8 @@ func writeDiagnosticsResponse(w http.ResponseWriter, diag DiagnosticsInfo, cache
 
 func (r *Router) computeDiagnostics(ctx context.Context) DiagnosticsInfo {
 	diag := DiagnosticsInfo{
+		Nodes:  []NodeDiagnostic{},
+		PBS:    []PBSDiagnostic{},
 		Errors: []string{},
 	}
 

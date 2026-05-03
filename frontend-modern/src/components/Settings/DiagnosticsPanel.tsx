@@ -266,9 +266,12 @@ export const DiagnosticsPanel: Component = () => {
         const ipv4Re = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(\/\d{1,2})?\b/g;
 
         const redactString = (s: string): string => s.replace(ipv4Re, '[REDACTED_IP]');
+        const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+        const pbs = Array.isArray(data.pbs) ? data.pbs : [];
+        const errors = Array.isArray(data.errors) ? data.errors : [];
 
         // Redact node hosts
-        data.nodes = data.nodes.map((node, i) => ({
+        data.nodes = nodes.map((node, i) => ({
             ...node,
             host: `node-${i + 1}`,
             name: `node-${i + 1}`,
@@ -277,7 +280,7 @@ export const DiagnosticsPanel: Component = () => {
         }));
 
         // Redact PBS hosts
-        data.pbs = data.pbs.map((p, i) => ({
+        data.pbs = pbs.map((p, i) => ({
             ...p,
             host: `pbs-${i + 1}`,
             name: `pbs-${i + 1}`,
@@ -343,7 +346,7 @@ export const DiagnosticsPanel: Component = () => {
         }
 
         // Redact IPs in error messages
-        data.errors = data.errors.map(redactString);
+        data.errors = errors.map(redactString);
 
         // Redact IPs from any raw snapshot data that may be present
         const raw2 = data as any;
@@ -390,6 +393,8 @@ export const DiagnosticsPanel: Component = () => {
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
             showSuccess(`Diagnostics exported (${type})`);
+        } catch (error) {
+            showError(error instanceof Error ? error.message : 'Failed to export diagnostics');
         } finally {
             setExportLoading(false);
         }
