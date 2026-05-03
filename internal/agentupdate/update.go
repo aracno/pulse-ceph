@@ -598,6 +598,10 @@ func determineArch() string {
 		return "linux-arm64"
 	case "armv7l", "armhf", "armv7":
 		return "linux-armv7"
+	case "mips64":
+		return "linux-mips64"
+	case "mips64el", "mips64le":
+		return "linux-mips64le"
 	default:
 		return ""
 	}

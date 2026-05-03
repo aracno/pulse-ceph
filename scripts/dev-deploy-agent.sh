@@ -88,6 +88,8 @@ for host in "${HOSTS[@]}"; do
         x86_64)  TARGET_GOARCH="amd64" ;;
         aarch64) TARGET_GOARCH="arm64" ;;
         armv7l)  TARGET_GOARCH="arm" ;;
+        mips64)  TARGET_GOARCH="mips64" ;;
+        mips64el|mips64le) TARGET_GOARCH="mips64le" ;;
         *)       log_error "Unsupported architecture: $HOST_ARCH"; FAILED_HOSTS+=("$host"); continue ;;
     esac
 

@@ -141,16 +141,18 @@ func TestHostAgentBinary_Fields(t *testing.T) {
 func TestRequiredHostAgentBinaries(t *testing.T) {
 	// Verify expected platforms are present
 	expectedPlatforms := map[string]bool{
-		"linux-amd64":   false,
-		"linux-arm64":   false,
-		"linux-armv7":   false,
-		"linux-armv6":   false,
-		"linux-386":     false,
-		"darwin-amd64":  false,
-		"darwin-arm64":  false,
-		"windows-amd64": false,
-		"windows-arm64": false,
-		"windows-386":   false,
+		"linux-amd64":    false,
+		"linux-arm64":    false,
+		"linux-armv7":    false,
+		"linux-armv6":    false,
+		"linux-mips64":   false,
+		"linux-mips64le": false,
+		"linux-386":      false,
+		"darwin-amd64":   false,
+		"darwin-arm64":   false,
+		"windows-amd64":  false,
+		"windows-arm64":  false,
+		"windows-386":    false,
 	}
 
 	for _, binary := range requiredHostAgentBinaries {

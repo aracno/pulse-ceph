@@ -90,6 +90,14 @@ RUN --mount=type=cache,id=pulse-go-mod,target=/go/pkg/mod \
       -ldflags="-s -w -X github.com/rcourtman/pulse-go-rewrite/internal/hostagent.Version=${VERSION}" \
       -trimpath \
       -o pulse-host-agent-linux-armv6 ./cmd/pulse-host-agent && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=mips64 go build \
+      -ldflags="-s -w -X github.com/rcourtman/pulse-go-rewrite/internal/hostagent.Version=${VERSION}" \
+      -trimpath \
+      -o pulse-host-agent-linux-mips64 ./cmd/pulse-host-agent && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=mips64le go build \
+      -ldflags="-s -w -X github.com/rcourtman/pulse-go-rewrite/internal/hostagent.Version=${VERSION}" \
+      -trimpath \
+      -o pulse-host-agent-linux-mips64le ./cmd/pulse-host-agent && \
     CGO_ENABLED=0 GOOS=linux GOARCH=386 go build \
       -ldflags="-s -w -X github.com/rcourtman/pulse-go-rewrite/internal/hostagent.Version=${VERSION}" \
       -trimpath \
@@ -143,6 +151,14 @@ RUN --mount=type=cache,id=pulse-go-mod,target=/go/pkg/mod \
       -ldflags="-s -w -X main.Version=${VERSION}" \
       -trimpath \
       -o pulse-agent-linux-armv6 ./cmd/pulse-agent && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=mips64 go build \
+      -ldflags="-s -w -X main.Version=${VERSION}" \
+      -trimpath \
+      -o pulse-agent-linux-mips64 ./cmd/pulse-agent && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=mips64le go build \
+      -ldflags="-s -w -X main.Version=${VERSION}" \
+      -trimpath \
+      -o pulse-agent-linux-mips64le ./cmd/pulse-agent && \
     CGO_ENABLED=0 GOOS=linux GOARCH=386 go build \
       -ldflags="-s -w -X main.Version=${VERSION}" \
       -trimpath \
@@ -269,6 +285,8 @@ COPY --from=backend-builder /app/pulse-host-agent-linux-amd64 /opt/pulse/bin/
 COPY --from=backend-builder /app/pulse-host-agent-linux-arm64 /opt/pulse/bin/
 COPY --from=backend-builder /app/pulse-host-agent-linux-armv7 /opt/pulse/bin/
 COPY --from=backend-builder /app/pulse-host-agent-linux-armv6 /opt/pulse/bin/
+COPY --from=backend-builder /app/pulse-host-agent-linux-mips64 /opt/pulse/bin/
+COPY --from=backend-builder /app/pulse-host-agent-linux-mips64le /opt/pulse/bin/
 COPY --from=backend-builder /app/pulse-host-agent-linux-386 /opt/pulse/bin/
 COPY --from=backend-builder /app/pulse-host-agent-darwin-amd64 /opt/pulse/bin/
 COPY --from=backend-builder /app/pulse-host-agent-darwin-arm64 /opt/pulse/bin/
@@ -287,6 +305,8 @@ COPY --from=backend-builder /app/pulse-agent-linux-amd64 /opt/pulse/bin/
 COPY --from=backend-builder /app/pulse-agent-linux-arm64 /opt/pulse/bin/
 COPY --from=backend-builder /app/pulse-agent-linux-armv7 /opt/pulse/bin/
 COPY --from=backend-builder /app/pulse-agent-linux-armv6 /opt/pulse/bin/
+COPY --from=backend-builder /app/pulse-agent-linux-mips64 /opt/pulse/bin/
+COPY --from=backend-builder /app/pulse-agent-linux-mips64le /opt/pulse/bin/
 COPY --from=backend-builder /app/pulse-agent-linux-386 /opt/pulse/bin/
 COPY --from=backend-builder /app/pulse-agent-darwin-amd64 /opt/pulse/bin/
 COPY --from=backend-builder /app/pulse-agent-darwin-arm64 /opt/pulse/bin/

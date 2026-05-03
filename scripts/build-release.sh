@@ -73,12 +73,14 @@ cp -r frontend-modern/dist internal/api/frontend-modern/
 
 # Build host agents for every supported platform/architecture so download endpoints work offline
 echo "Building host agents for all platforms..."
-host_agent_order=(linux-amd64 linux-arm64 linux-armv7 linux-armv6 linux-386 darwin-amd64 darwin-arm64 freebsd-amd64 freebsd-arm64 windows-amd64 windows-arm64 windows-386)
+host_agent_order=(linux-amd64 linux-arm64 linux-armv7 linux-armv6 linux-mips64 linux-mips64le linux-386 darwin-amd64 darwin-arm64 freebsd-amd64 freebsd-arm64 windows-amd64 windows-arm64 windows-386)
 host_agent_envs=(
     "GOOS=linux GOARCH=amd64"
     "GOOS=linux GOARCH=arm64"
     "GOOS=linux GOARCH=arm GOARM=7"
     "GOOS=linux GOARCH=arm GOARM=6"
+    "GOOS=linux GOARCH=mips64"
+    "GOOS=linux GOARCH=mips64le"
     "GOOS=linux GOARCH=386"
     "GOOS=darwin GOARCH=amd64"
     "GOOS=darwin GOARCH=arm64"
@@ -286,6 +288,12 @@ case "$ARCH" in
     armv7l|armhf)
         exec "$(dirname "$0")/pulse-host-agent-linux-armv7" "$@"
         ;;
+    mips64)
+        exec "$(dirname "$0")/pulse-host-agent-linux-mips64" "$@"
+        ;;
+    mips64el|mips64le)
+        exec "$(dirname "$0")/pulse-host-agent-linux-mips64le" "$@"
+        ;;
     *)
         echo "Unsupported architecture: $ARCH" >&2
         exit 1
@@ -309,6 +317,12 @@ case "$ARCH" in
     armv7l|armhf)
         exec "$(dirname "$0")/pulse-agent-linux-armv7" "$@"
         ;;
+    mips64)
+        exec "$(dirname "$0")/pulse-agent-linux-mips64" "$@"
+        ;;
+    mips64el|mips64le)
+        exec "$(dirname "$0")/pulse-agent-linux-mips64le" "$@"
+        ;;
     *)
         echo "Unsupported architecture: $ARCH" >&2
         exit 1
@@ -326,6 +340,8 @@ tar -czf "$RELEASE_DIR/pulse-host-agent-v${VERSION}-linux-amd64.tar.gz" -C "$BUI
 tar -czf "$RELEASE_DIR/pulse-host-agent-v${VERSION}-linux-arm64.tar.gz" -C "$BUILD_DIR" pulse-host-agent-linux-arm64
 tar -czf "$RELEASE_DIR/pulse-host-agent-v${VERSION}-linux-armv7.tar.gz" -C "$BUILD_DIR" pulse-host-agent-linux-armv7
 tar -czf "$RELEASE_DIR/pulse-host-agent-v${VERSION}-linux-armv6.tar.gz" -C "$BUILD_DIR" pulse-host-agent-linux-armv6
+tar -czf "$RELEASE_DIR/pulse-host-agent-v${VERSION}-linux-mips64.tar.gz" -C "$BUILD_DIR" pulse-host-agent-linux-mips64
+tar -czf "$RELEASE_DIR/pulse-host-agent-v${VERSION}-linux-mips64le.tar.gz" -C "$BUILD_DIR" pulse-host-agent-linux-mips64le
 tar -czf "$RELEASE_DIR/pulse-host-agent-v${VERSION}-linux-386.tar.gz" -C "$BUILD_DIR" pulse-host-agent-linux-386
 # Darwin
 tar -czf "$RELEASE_DIR/pulse-host-agent-v${VERSION}-darwin-amd64.tar.gz" -C "$BUILD_DIR" pulse-host-agent-darwin-amd64
@@ -344,6 +360,8 @@ tar -czf "$RELEASE_DIR/pulse-agent-v${VERSION}-linux-amd64.tar.gz" -C "$BUILD_DI
 tar -czf "$RELEASE_DIR/pulse-agent-v${VERSION}-linux-arm64.tar.gz" -C "$BUILD_DIR" pulse-agent-linux-arm64
 tar -czf "$RELEASE_DIR/pulse-agent-v${VERSION}-linux-armv7.tar.gz" -C "$BUILD_DIR" pulse-agent-linux-armv7
 tar -czf "$RELEASE_DIR/pulse-agent-v${VERSION}-linux-armv6.tar.gz" -C "$BUILD_DIR" pulse-agent-linux-armv6
+tar -czf "$RELEASE_DIR/pulse-agent-v${VERSION}-linux-mips64.tar.gz" -C "$BUILD_DIR" pulse-agent-linux-mips64
+tar -czf "$RELEASE_DIR/pulse-agent-v${VERSION}-linux-mips64le.tar.gz" -C "$BUILD_DIR" pulse-agent-linux-mips64le
 tar -czf "$RELEASE_DIR/pulse-agent-v${VERSION}-linux-386.tar.gz" -C "$BUILD_DIR" pulse-agent-linux-386
 # Darwin
 tar -czf "$RELEASE_DIR/pulse-agent-v${VERSION}-darwin-amd64.tar.gz" -C "$BUILD_DIR" pulse-agent-darwin-amd64
@@ -369,9 +387,15 @@ cp "$BUILD_DIR/pulse-agent-freebsd-amd64" "$RELEASE_DIR/"
 cp "$BUILD_DIR/pulse-agent-freebsd-arm64" "$RELEASE_DIR/"
 cp "$BUILD_DIR/pulse-host-agent-freebsd-amd64" "$RELEASE_DIR/"
 cp "$BUILD_DIR/pulse-host-agent-freebsd-arm64" "$RELEASE_DIR/"
+cp "$BUILD_DIR/pulse-agent-linux-mips64" "$RELEASE_DIR/"
+cp "$BUILD_DIR/pulse-agent-linux-mips64le" "$RELEASE_DIR/"
+cp "$BUILD_DIR/pulse-host-agent-linux-mips64" "$RELEASE_DIR/"
+cp "$BUILD_DIR/pulse-host-agent-linux-mips64le" "$RELEASE_DIR/"
 
-# Copy Windows, macOS, and FreeBSD binaries into universal tarball for /download/ endpoint
-echo "Adding Windows, macOS, and FreeBSD binaries to universal tarball..."
+# Copy binaries not tied to the server build matrix into universal tarball for /download/ endpoint
+echo "Adding extra agent binaries to universal tarball..."
+cp "$BUILD_DIR/pulse-host-agent-linux-mips64" "$universal_dir/bin/"
+cp "$BUILD_DIR/pulse-host-agent-linux-mips64le" "$universal_dir/bin/"
 cp "$BUILD_DIR/pulse-host-agent-darwin-amd64" "$universal_dir/bin/"
 cp "$BUILD_DIR/pulse-host-agent-darwin-arm64" "$universal_dir/bin/"
 cp "$BUILD_DIR/pulse-host-agent-freebsd-amd64" "$universal_dir/bin/"
@@ -384,6 +408,8 @@ cp "$BUILD_DIR/pulse-agent-darwin-amd64" "$universal_dir/bin/"
 cp "$BUILD_DIR/pulse-agent-darwin-arm64" "$universal_dir/bin/"
 cp "$BUILD_DIR/pulse-agent-freebsd-amd64" "$universal_dir/bin/"
 cp "$BUILD_DIR/pulse-agent-freebsd-arm64" "$universal_dir/bin/"
+cp "$BUILD_DIR/pulse-agent-linux-mips64" "$universal_dir/bin/"
+cp "$BUILD_DIR/pulse-agent-linux-mips64le" "$universal_dir/bin/"
 cp "$BUILD_DIR/pulse-agent-windows-amd64.exe" "$universal_dir/bin/"
 cp "$BUILD_DIR/pulse-agent-windows-arm64.exe" "$universal_dir/bin/"
 cp "$BUILD_DIR/pulse-agent-windows-386.exe" "$universal_dir/bin/"
@@ -514,6 +540,8 @@ host_agents = [
     "pulse-host-agent-linux-arm64",
     "pulse-host-agent-linux-armv7",
     "pulse-host-agent-linux-armv6",
+    "pulse-host-agent-linux-mips64",
+    "pulse-host-agent-linux-mips64le",
     "pulse-host-agent-linux-386",
     "pulse-host-agent-darwin-amd64",
     "pulse-host-agent-darwin-arm64",

@@ -122,6 +122,16 @@ func TestDetermineArchOverrides(t *testing.T) {
 		t.Fatalf("expected linux-armv7, got %q", got)
 	}
 
+	unameCommand = func() ([]byte, error) { return []byte("mips64"), nil }
+	if got := determineArch(); got != "linux-mips64" {
+		t.Fatalf("expected linux-mips64, got %q", got)
+	}
+
+	unameCommand = func() ([]byte, error) { return []byte("mips64el"), nil }
+	if got := determineArch(); got != "linux-mips64le" {
+		t.Fatalf("expected linux-mips64le, got %q", got)
+	}
+
 	unameCommand = func() ([]byte, error) { return []byte("mips"), nil }
 	if got := determineArch(); got != "" {
 		t.Fatalf("expected empty arch for unknown uname, got %q", got)

@@ -32,6 +32,8 @@ var requiredHostAgentBinaries = []HostAgentBinary{
 	{Platform: "linux", Arch: "arm64", Filenames: []string{"pulse-host-agent-linux-arm64"}},
 	{Platform: "linux", Arch: "armv7", Filenames: []string{"pulse-host-agent-linux-armv7"}},
 	{Platform: "linux", Arch: "armv6", Filenames: []string{"pulse-host-agent-linux-armv6"}},
+	{Platform: "linux", Arch: "mips64", Filenames: []string{"pulse-host-agent-linux-mips64"}},
+	{Platform: "linux", Arch: "mips64le", Filenames: []string{"pulse-host-agent-linux-mips64le"}},
 	{Platform: "linux", Arch: "386", Filenames: []string{"pulse-host-agent-linux-386"}},
 	{Platform: "darwin", Arch: "amd64", Filenames: []string{"pulse-host-agent-darwin-amd64"}},
 	{Platform: "darwin", Arch: "arm64", Filenames: []string{"pulse-host-agent-darwin-arm64"}},

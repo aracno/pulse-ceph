@@ -121,6 +121,10 @@ func normalizeUnifiedAgentArch(arch string) string {
 		return "linux-armv7"
 	case "linux-armv6", "armv6":
 		return "linux-armv6"
+	case "linux-mips64", "mips64":
+		return "linux-mips64"
+	case "linux-mips64le", "mips64le", "mips64el":
+		return "linux-mips64le"
 	case "linux-386", "386", "i386", "i686":
 		return "linux-386"
 	case "darwin-amd64", "macos-amd64":

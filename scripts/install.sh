@@ -1018,6 +1018,8 @@ case "$ARCH" in
     aarch64|arm64) ARCH="arm64" ;;
     armv7l|armhf) ARCH="armv7" ;;
     armv6l) ARCH="armv6" ;;
+    mips64) ARCH="mips64" ;;
+    mips64el|mips64le) ARCH="mips64le" ;;
     i386|i686) ARCH="386" ;;
     *) fail "Unsupported architecture: $ARCH" ;;
 esac
