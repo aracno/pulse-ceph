@@ -3281,45 +3281,53 @@ EOF
 setup_update_command() {
     # Create update command at /bin/update for ProxmoxVE LXC detection
     # This allows the backend to detect ProxmoxVE installations
-    cat > /bin/update <<'EOF'
+    local update_helper_path="${UPDATE_HELPER_PATH:-${PULSE_UPDATE_HELPER_PATH:-/bin/update}}"
+    local install_dir="${INSTALL_DIR:-/opt/pulse}"
+    local profile_path="${PULSE_PROFILE_PATH:-/etc/profile}"
+    local bashrc_path="${PULSE_BASHRC_PATH:-/etc/bash.bashrc}"
+    local installer_url
+    installer_url="$(maintenance_raw_url "install.sh")"
+
+    cat > "$update_helper_path" <<EOF
 #!/usr/bin/env bash
 # Pulse update command
 # This script re-runs the Pulse installer to update to the latest version
 
-set -e
+set -euo pipefail
 
-INSTALL_ROOT="/opt/pulse"
-MARKER_FILE="${INSTALL_ROOT}/BUILD_FROM_SOURCE"
+INSTALL_ROOT=$(printf '%q' "$install_dir")
+INSTALLER_URL=$(printf '%q' "$installer_url")
+MARKER_FILE="\${INSTALL_ROOT}/BUILD_FROM_SOURCE"
 
 extra_args=()
-if [[ -f "$MARKER_FILE" ]]; then
-    branch=$(tr -d '\r\n' <"$MARKER_FILE" 2>/dev/null || true)
-    if [[ -n "$branch" ]]; then
-        extra_args+=(--source "$branch")
+if [[ -f "\$MARKER_FILE" ]]; then
+    branch=\$(tr -d '\r\n' <"\$MARKER_FILE" 2>/dev/null || true)
+    if [[ -n "\$branch" ]]; then
+        extra_args+=(--source "\$branch")
     fi
 fi
 
 echo "Updating Pulse..."
-if [[ ${#extra_args[@]} -gt 0 ]]; then
-    curl -fsSL "$(maintenance_raw_url "install.sh")" | bash -s -- "${extra_args[@]}"
+if [[ \${#extra_args[@]} -gt 0 ]]; then
+    curl -fsSL "\$INSTALLER_URL" | bash -s -- "\${extra_args[@]}"
 else
-    curl -fsSL "$(maintenance_raw_url "install.sh")" | bash
+    curl -fsSL "\$INSTALLER_URL" | bash
 fi
 
 echo ""
 echo "Update complete! Pulse will restart automatically."
 EOF
 
-    chmod +x /bin/update
+    chmod +x "$update_helper_path"
 
     # Ensure /usr/local/bin is in PATH for all users
-    if ! grep -q '/usr/local/bin' /etc/profile 2>/dev/null; then
-        echo 'export PATH="/usr/local/bin:$PATH"' >> /etc/profile
+    if ! grep -q '/usr/local/bin' "$profile_path" 2>/dev/null; then
+        echo 'export PATH="/usr/local/bin:$PATH"' >> "$profile_path"
     fi
 
     # Also add to bash profile if it exists
-    if [[ -f /etc/bash.bashrc ]] && ! grep -q '/usr/local/bin' /etc/bash.bashrc 2>/dev/null; then
-        echo 'export PATH="/usr/local/bin:$PATH"' >> /etc/bash.bashrc
+    if [[ -f "$bashrc_path" ]] && ! grep -q '/usr/local/bin' "$bashrc_path" 2>/dev/null; then
+        echo 'export PATH="/usr/local/bin:$PATH"' >> "$bashrc_path"
     fi
 }
 

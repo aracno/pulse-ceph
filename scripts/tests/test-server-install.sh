@@ -362,6 +362,93 @@ test_install_additional_agent_binaries_skips_network_when_local_extras_are_missi
   )
 }
 
+test_setup_update_command_renders_self_contained_update_helper() {
+  (
+    load_installer
+
+    local tmpdir update_path profile_path bashrc_path fakebin curl_log bash_log real_bash
+    tmpdir="$(mktemp -d)"
+    update_path="${tmpdir}/update"
+    profile_path="${tmpdir}/profile"
+    bashrc_path="${tmpdir}/bashrc"
+    fakebin="${tmpdir}/bin"
+    curl_log="${tmpdir}/curl.log"
+    bash_log="${tmpdir}/bash.log"
+    real_bash="$(command -v bash)"
+
+    mkdir -p "${fakebin}" "${tmpdir}/opt/pulse"
+    : > "${profile_path}"
+    : > "${bashrc_path}"
+
+    GITHUB_REPO="example/pulse"
+    SOURCE_BRANCH="release/5.1"
+    INSTALL_DIR="${tmpdir}/opt/pulse"
+    UPDATE_HELPER_PATH="${update_path}"
+    PULSE_PROFILE_PATH="${profile_path}"
+    PULSE_BASHRC_PATH="${bashrc_path}"
+
+    setup_update_command
+
+    if [[ ! -x "${update_path}" ]]; then
+      echo "update helper was not created executable" >&2
+      rm -rf "${tmpdir}"
+      return 1
+    fi
+    if grep -Fq 'maintenance_raw_url' "${update_path}"; then
+      echo "update helper still depends on installer-only maintenance_raw_url" >&2
+      cat "${update_path}" >&2
+      rm -rf "${tmpdir}"
+      return 1
+    fi
+    if ! grep -Fq 'set -euo pipefail' "${update_path}"; then
+      echo "update helper does not fail closed for curl pipe failures" >&2
+      cat "${update_path}" >&2
+      rm -rf "${tmpdir}"
+      return 1
+    fi
+    if ! grep -Fq 'INSTALLER_URL=https://raw.githubusercontent.com/example/pulse/release/5.1/install.sh' "${update_path}"; then
+      echo "update helper did not render the maintenance installer URL" >&2
+      cat "${update_path}" >&2
+      rm -rf "${tmpdir}"
+      return 1
+    fi
+
+    printf 'feature-branch\n' > "${INSTALL_DIR}/BUILD_FROM_SOURCE"
+
+    cat > "${fakebin}/curl" <<EOF
+#!${real_bash}
+printf '%s\n' "\$*" > "\$PULSE_TEST_CURL_LOG"
+printf 'echo installer ok\n'
+EOF
+    cat > "${fakebin}/bash" <<EOF
+#!${real_bash}
+cat >/dev/null
+printf '%s\n' "\$*" > "\$PULSE_TEST_BASH_LOG"
+EOF
+    chmod +x "${fakebin}/curl" "${fakebin}/bash"
+
+    PULSE_TEST_CURL_LOG="${curl_log}" \
+      PULSE_TEST_BASH_LOG="${bash_log}" \
+      PATH="${fakebin}:${PATH}" \
+      "${real_bash}" "${update_path}" >/dev/null
+
+    if ! grep -Fq 'https://raw.githubusercontent.com/example/pulse/release/5.1/install.sh' "${curl_log}"; then
+      echo "update helper did not call curl with the maintenance installer URL" >&2
+      cat "${curl_log}" >&2
+      rm -rf "${tmpdir}"
+      return 1
+    fi
+    if ! grep -Fq -- '-s -- --source feature-branch' "${bash_log}"; then
+      echo "update helper did not preserve source-build update arguments" >&2
+      cat "${bash_log}" >&2
+      rm -rf "${tmpdir}"
+      return 1
+    fi
+
+    rm -rf "${tmpdir}"
+  )
+}
+
 main() {
   assert_success "infer_release_from_archive_name parses prerelease tarballs" test_infer_release_from_archive_name_supports_prerelease
   assert_success "update disk preflight fails on shared low-space filesystems" test_ensure_update_disk_headroom_fails_when_tmp_and_install_share_full_filesystem
@@ -374,6 +461,7 @@ main() {
   assert_success "installer supports curl-pipe execution via bash stdin" test_installer_runs_when_streamed_over_stdin
   assert_success "install_additional_agent_binaries copies local extras without network" test_install_additional_agent_binaries_copies_local_binaries_without_network
   assert_success "install_additional_agent_binaries skips network when extras are missing" test_install_additional_agent_binaries_skips_network_when_local_extras_are_missing
+  assert_success "setup_update_command renders a self-contained update helper" test_setup_update_command_renders_self_contained_update_helper
 
   if (( failures > 0 )); then
     echo "Total failures: ${failures}" >&2
