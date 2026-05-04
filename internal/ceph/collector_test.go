@@ -364,6 +364,9 @@ func TestCollect_DFCommandError(t *testing.T) {
 		if name == "ceph" && len(args) > 0 && args[0] == "df" {
 			return nil, []byte("df failed"), errors.New("df error")
 		}
+		if name == "ceph" && len(args) >= 2 && args[0] == "osd" && args[1] == "tree" {
+			return []byte(`{"nodes":[]}`), nil, nil
+		}
 		t.Fatalf("unexpected command: %s %v", name, args)
 		return nil, nil, nil
 	})
@@ -400,6 +403,9 @@ func TestCollect_DFParseError(t *testing.T) {
 		}
 		if name == "ceph" && len(args) > 0 && args[0] == "df" {
 			return []byte(`{not-json}`), nil, nil
+		}
+		if name == "ceph" && len(args) >= 2 && args[0] == "osd" && args[1] == "tree" {
+			return []byte(`{"nodes":[]}`), nil, nil
 		}
 		t.Fatalf("unexpected command: %s %v", name, args)
 		return nil, nil, nil
@@ -441,6 +447,9 @@ func TestCollect_UsagePercentFromDF(t *testing.T) {
 		}
 		if name == "ceph" && len(args) > 0 && args[0] == "df" {
 			return dfJSON, nil, nil
+		}
+		if name == "ceph" && len(args) >= 2 && args[0] == "osd" && args[1] == "tree" {
+			return []byte(`{"nodes":[]}`), nil, nil
 		}
 		t.Fatalf("unexpected command: %s %v", name, args)
 		return nil, nil, nil
