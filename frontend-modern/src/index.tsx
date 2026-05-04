@@ -14,10 +14,18 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
 
 logger.info('Pulse monitoring dashboard starting');
 
+const notifyPyxiCloudParentReady = () => {
+  if (window.parent !== window) {
+    window.parent.postMessage('pyxicloud:pulse:ready', 'https://support.pyxise.com');
+    window.parent.postMessage('pyxicloud:pulse:ready', 'https://support.zotcom.re');
+  }
+};
+
 if (root) {
   logger.debug('[Index] Root element found, rendering App...');
   try {
     render(() => <App />, root);
+    requestAnimationFrame(notifyPyxiCloudParentReady);
     logger.debug('[Index] Render call completed');
   } catch (error) {
     logger.error('[Index] Render error', error);
